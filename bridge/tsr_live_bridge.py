@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import json
-import mmap
 import struct
 import sys
 import time
@@ -36,6 +35,69 @@ try:
 except ImportError:
     print("[!] Missing dependency. Run: pip install websockets")
     sys.exit(1)
+
+
+# ============================================================
+# WIN32 SHARED MEMORY (OpenFileMapping + MapViewOfFile)
+# We use the Win32 API directly because Python's mmap.mmap(-1, ..., tagname)
+# *creates* the region if it doesn't exist (instead of failing) — and
+# requires a length that exactly matches the existing region's size.
+# OpenFileMapping returns NULL if the region doesn't exist (clean detection),
+# and MapViewOfFile with size=0 maps the whole region whatever its size.
+# ============================================================
+if sys.platform == "win32":
+    from ctypes import wintypes
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32.OpenFileMappingW.restype = wintypes.HANDLE
+    _kernel32.OpenFileMappingW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    _kernel32.MapViewOfFile.restype = ctypes.c_void_p
+    _kernel32.MapViewOfFile.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.c_size_t]
+    _kernel32.UnmapViewOfFile.restype = wintypes.BOOL
+    _kernel32.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
+    _kernel32.CloseHandle.restype = wintypes.BOOL
+    _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    FILE_MAP_READ = 0x0004
+else:
+    _kernel32 = None
+    FILE_MAP_READ = 0
+
+
+class SharedMemView:
+    """Read-only view onto an *existing* named shared memory region."""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.handle = None
+        self.addr = None
+        if _kernel32 is None:
+            raise OSError("Win32 API only available on Windows")
+        h = _kernel32.OpenFileMappingW(FILE_MAP_READ, False, name)
+        if not h:
+            err = ctypes.get_last_error()
+            raise FileNotFoundError(f"OpenFileMapping({name}) error={err}")
+        addr = _kernel32.MapViewOfFile(h, FILE_MAP_READ, 0, 0, 0)
+        if not addr:
+            err = ctypes.get_last_error()
+            _kernel32.CloseHandle(h)
+            raise OSError(f"MapViewOfFile({name}) error={err}")
+        self.handle = h
+        self.addr = addr
+
+    def read(self, offset: int, length: int) -> bytes:
+        return ctypes.string_at(self.addr + offset, length)
+
+    def close(self):
+        if self.addr:
+            _kernel32.UnmapViewOfFile(self.addr)
+            self.addr = None
+        if self.handle:
+            _kernel32.CloseHandle(self.handle)
+            self.handle = None
+
+    def __del__(self):
+        try: self.close()
+        except Exception: pass
 
 
 # ============================================================
@@ -247,10 +309,9 @@ def safe_str(b: bytes) -> str:
     return b.split(b"\x00", 1)[0].decode("latin-1", errors="ignore").strip()
 
 
-def read_scoring(mm) -> dict | None:
+def read_scoring(mm: SharedMemView) -> dict | None:
     """Read the entire Scoring shared memory. Returns dict or None if not ready."""
-    mm.seek(0)
-    raw = mm.read(ctypes.sizeof(rF2Scoring))
+    raw = mm.read(0, ctypes.sizeof(rF2Scoring))
     sc = rF2Scoring.from_buffer_copy(raw)
     if sc.mVersionUpdateBegin != sc.mVersionUpdateEnd or sc.mScoringInfo.mNumVehicles < 1:
         return None
@@ -314,18 +375,16 @@ def read_scoring(mm) -> dict | None:
     }
 
 
-def read_telemetry_for_player(mm, player_id: int, num_vehicles: int) -> dict | None:
+def read_telemetry_for_player(mm: SharedMemView, player_id: int, num_vehicles: int) -> dict | None:
     """Read Telemetry, find vehicle matching player_id (by mID)."""
-    mm.seek(0)
-    update_begin, update_end, num_t = struct.unpack("<IIi", mm.read(12))
+    update_begin, update_end, num_t = struct.unpack("<IIi", mm.read(0, 12))
     if update_begin != update_end or num_t < 1:
         return None
     n = max(0, min(num_t, num_vehicles, MAX_MAPPED_VEHICLES))
     head_size = ctypes.sizeof(rF2VehicleTelemetryHead)
     for i in range(n):
         offset = 12 + i * TELEMETRY_VEHICLE_STRIDE
-        mm.seek(offset)
-        raw = mm.read(head_size)
+        raw = mm.read(offset, head_size)
         v = rF2VehicleTelemetryHead.from_buffer_copy(raw)
         if v.mID == player_id:
             speed = (v.mLocalVel.x ** 2 + v.mLocalVel.y ** 2 + v.mLocalVel.z ** 2) ** 0.5 * 3.6
@@ -370,19 +429,29 @@ async def handler(ws):
 
 
 def try_open_pair():
-    """Try rF2 names first, fall back to LMU names."""
-    for label, names in [("rFactor2", NAMES_RF2), ("Racelab/LMU", NAMES_LMU)]:
+    """Try rF2 names first, fall back to LMU names. Returns (scoring_view, tele_view, label) or all None."""
+    diagnostics = []
+    for label, names in [("rFactor2 (TheIronWolf)", NAMES_RF2), ("Racelab/LMU", NAMES_LMU)]:
         try:
-            mm_s = mmap.mmap(-1, 64 * 1024 * 1024, names["scoring"])
-            try:
-                mm_t = mmap.mmap(-1, 64 * 1024 * 1024, names["telemetry"])
-            except Exception:
-                mm_s.close()
-                continue
-            print(f"[OK] Connected to {label}: {names['scoring']} + {names['telemetry']}")
-            return mm_s, mm_t, label
-        except Exception:
+            mm_s = SharedMemView(names["scoring"])
+        except FileNotFoundError as e:
+            diagnostics.append(f"  - {label}: scoring NOT FOUND ({names['scoring']})")
             continue
+        except OSError as e:
+            diagnostics.append(f"  - {label}: scoring error: {e}")
+            continue
+        try:
+            mm_t = SharedMemView(names["telemetry"])
+        except Exception as e:
+            mm_s.close()
+            diagnostics.append(f"  - {label}: scoring OK but telemetry error: {e}")
+            continue
+        print(f"[OK] Connected to {label}")
+        print(f"     scoring   = {names['scoring']}")
+        print(f"     telemetry = {names['telemetry']}")
+        return mm_s, mm_t, label
+    for line in diagnostics:
+        print(line)
     return None, None, None
 
 
@@ -399,12 +468,18 @@ async def broadcast_loop():
             last_attempt = now
             mm_s, mm_t, label = try_open_pair()
             if mm_s is None and now - last_warn > 5:
-                print("[..] Plugin not detected. Is LMU running with the SMMP plugin enabled?")
+                print("[..] Plugin not detected. Checks:")
+                print("     1. Is LMU running?")
+                print("     2. Is rFactor2SharedMemoryMapPlugin64.dll in LMU/Plugins/ ?")
+                print("     3. In UserData/player/CustomPluginVariables.JSON, do you have:")
+                print('        "rFactor2SharedMemoryMapPlugin.dll": { " Enabled":1 }')
+                print("     4. Have you restarted LMU after enabling the plugin?")
+                print("     5. Are you in a session (not just at the menu) ?")
                 last_warn = now
                 if CLIENTS:
                     payload = json.dumps({
                         "error": "shared_memory_unavailable",
-                        "message": "Plugin non détecté — lance LMU avec rFactor2SharedMemoryMapPlugin activé.",
+                        "message": "Bridge connecté, mais shared memory du plugin introuvable. Vérifie que LMU est lancé, plugin activé, et que tu es DANS une session (track chargé, pas le menu).",
                         "ts": now,
                     })
                     await asyncio.gather(*[c.send(payload) for c in CLIENTS], return_exceptions=True)
