@@ -7,30 +7,48 @@
 <meta name="description" content="Special Event Beginner pour Le Mans Ultimate : programme, règles, conditions et récompenses de la course découverte officielle." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=League+Gothic:wdth@75..100&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
 <style>
 
 :root {
-  --bg: #0a0e14;
-  --bg-2: #11161f;
-  --bg-3: #1a212e;
-  --border: #232c3d;
-  --text: #e6ebf2;
-  --muted: #8a95a8;
-  --accent: #ff3c3c;
+  --primary-color: #e65757;
+  --primary-dark: #c94040;
+  --secondary-color: #4f94ef;
+  --dark-bg: #2a2a2a;
+  --darker-bg: #222222;
+  --darkest-bg: #111111;
+  --card-bg: rgba(17, 17, 17, 0.95);
+  --nav-bg: rgba(0, 0, 0, 0.7);
+  --text-color: #ffffff;
+  --text-muted: rgba(255, 255, 255, 0.7);
+  --border-color: rgba(255, 255, 255, 0.1);
+  --active-bg: rgba(255, 255, 255, 0.2);
+
+  --bg: var(--dark-bg);
+  --bg-2: var(--darker-bg);
+  --bg-3: var(--darkest-bg);
+  --border: var(--border-color);
+  --text: var(--text-color);
+  --muted: var(--text-muted);
+  --accent: var(--primary-color);
   --accent-2: #ffb84d;
   --green: #3ddc84;
-  --blue: #4da3ff;
+  --blue: var(--secondary-color);
   --purple: #b87cff;
-  --shadow: 0 8px 24px rgba(0,0,0,0.35);
+  --shadow: 0 8px 24px rgba(0,0,0,0.45);
   --radius: 12px;
+  --font-display: 'League Gothic', 'Oswald', 'Bebas Neue', Impact, sans-serif;
+  --font-body: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
 }
-* { box-sizing: border-box; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; }
+@media (max-width: 992px) { html { font-size: 14px; } }
+@media (max-width: 768px) { html { font-size: 12px; } }
 html, body {
-  margin: 0; padding: 0;
-  background: var(--bg); color: var(--text);
-  font-family: 'Rajdhani', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  font-size: 16px; line-height: 1.4; min-height: 100vh;
+  background: var(--dark-bg); color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.5; min-height: 100vh;
+  overflow-x: hidden;
 }
 .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
 
@@ -50,7 +68,7 @@ html, body {
   border: 1px solid rgba(255, 60, 60, 0.3);
   border-radius: 50%;
 }
-.brand h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; }
+.brand h1 { margin: 0; font-family: var(--font-display); font-size: 28px; font-weight: 400; letter-spacing: 1px; text-transform: uppercase; }
 .tagline { margin: 0; color: var(--muted); font-size: 13px; letter-spacing: 0.3px; }
 
 .nav { display: flex; gap: 4px; align-items: center; }
@@ -101,7 +119,7 @@ html, body {
   background: rgba(61,220,132,0.12); border: 1px solid rgba(61,220,132,0.4);
   color: var(--green); font-weight: 700;
 }
-.hero-title { margin: 0 0 8px; font-size: 40px; font-weight: 700; letter-spacing: 0.5px; line-height: 1.1; }
+.hero-title { margin: 0 0 8px; font-family: var(--font-display); font-size: 64px; font-weight: 400; letter-spacing: 1.5px; line-height: 1; text-transform: uppercase; }
 .hero-sub { margin: 0 0 16px; color: var(--muted); font-size: 16px; max-width: 560px; }
 .hero-meta { color: var(--text); font-size: 14px; display: flex; flex-wrap: wrap; gap: 16px; }
 .hero-meta span::before { content: "•"; margin-right: 8px; color: var(--accent); }
@@ -134,9 +152,9 @@ html, body {
   border-radius: var(--radius); padding: 20px 22px;
 }
 .info-card h2 {
-  margin: 0 0 14px; font-size: 14px;
-  letter-spacing: 3px; text-transform: uppercase; color: var(--muted);
-  font-weight: 600;
+  margin: 0 0 14px; font-family: var(--font-display);
+  font-size: 22px; font-weight: 400;
+  letter-spacing: 2px; text-transform: uppercase; color: var(--text);
 }
 .info-card ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
 .info-card li { display: flex; gap: 10px; align-items: baseline; font-size: 15px; }
@@ -162,7 +180,7 @@ html, body {
 .session.live { border-color: var(--accent); background: linear-gradient(90deg, rgba(255,60,60,0.10), var(--bg-3) 30%); }
 .session.past { opacity: 0.5; }
 .session-time { color: var(--text); font-weight: 600; }
-.session-name { font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 16px; letter-spacing: 0.3px; }
+.session-name { font-family: var(--font-display); font-weight: 400; font-size: 20px; letter-spacing: 1px; text-transform: uppercase; }
 .session-meta { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; text-align: right; }
 .session.live .session-meta { color: var(--accent); font-weight: 700; }
 
@@ -173,18 +191,18 @@ html, body {
   display: grid; grid-template-columns: 1fr auto;
   gap: 24px; align-items: center;
 }
-.cta h2 { margin: 0 0 8px; font-size: 22px; }
+.cta h2 { margin: 0 0 8px; font-family: var(--font-display); font-size: 32px; font-weight: 400; letter-spacing: 1.5px; text-transform: uppercase; }
 .cta p { margin: 0; color: var(--muted); font-size: 14px; max-width: 520px; }
 .cta-btn {
   display: inline-flex; align-items: center; gap: 8px;
-  background: var(--accent); color: white;
-  border: 1px solid var(--accent);
+  background: var(--primary-color); color: white;
+  border: 1px solid var(--primary-color);
   padding: 14px 22px; border-radius: 999px;
-  font-family: inherit; font-weight: 700; font-size: 14px;
-  letter-spacing: 1.5px; text-transform: uppercase;
-  text-decoration: none; transition: transform 0.15s ease, box-shadow 0.15s ease;
+  font-family: var(--font-display); font-weight: 400; font-size: 18px;
+  letter-spacing: 2px; text-transform: uppercase;
+  text-decoration: none; transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
-.cta-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(255,60,60,0.30); }
+.cta-btn:hover { transform: translateY(-1px); background: var(--primary-dark); border-color: var(--primary-dark); box-shadow: 0 8px 20px rgba(230,87,87,0.30); }
 
 .steps { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; counter-reset: step; }
 .steps li {
@@ -202,7 +220,7 @@ html, body {
   font-family: 'JetBrains Mono', monospace; font-weight: 700;
 }
 
-.section-title { font-size: 14px; letter-spacing: 3px; text-transform: uppercase; color: var(--muted); margin: 28px 0 16px; }
+.section-title { font-family: var(--font-display); font-size: 26px; font-weight: 400; letter-spacing: 2px; text-transform: uppercase; color: var(--text); margin: 28px 0 16px; }
 
 .site-footer { border-top: 1px solid var(--border); margin-top: auto; padding: 24px 0; }
 .footer-inner { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--muted); }
