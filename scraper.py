@@ -1007,6 +1007,29 @@ button { font-family: inherit; }
 /* ============================================================
    LIVE BRIDGE
    ============================================================ */
+.live-session-bar {
+  background: linear-gradient(135deg, rgba(255,60,60,0.06), rgba(77,163,255,0.04)), var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 24px;
+  margin-bottom: 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 24px;
+}
+.live-session-bar > div { display: flex; flex-direction: column; gap: 4px; }
+.live-session-bar .label { font-size: 10px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; }
+.live-session-bar strong { font-size: 16px; font-weight: 700; }
+.live-session-bar small { font-size: 11px; color: var(--muted); }
+
+.live-table { font-size: 12px; }
+.live-table th, .live-table td { padding: 6px 10px !important; }
+.live-table tr.tsr { background: rgba(255,184,77,0.05); }
+.live-table tr.player { background: rgba(255,60,60,0.10) !important; box-shadow: inset 4px 0 0 var(--accent); }
+.live-table tr.inpits { opacity: 0.7; }
+.live-table tr.ingarage { opacity: 0.4; }
+.live-table .num { font-family: 'JetBrains Mono', monospace; text-align: right; }
+
 .live-status {
   background: var(--bg-2); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 20px;
@@ -2590,10 +2613,40 @@ function renderLive() {
   const tab = State.selected.liveTab || 'instructions';
   const connected = State.liveSocket && State.liveSocket.readyState === 1;
   const data = State.liveData || {};
+  const session = data.session || {};
+  const player = data.player || {};
+  const vehicles = data.vehicles || [];
+
+  // Session header info
+  const phaseColor = {
+    'Green Flag': 'var(--green)', 'Full-Course Yellow': 'var(--accent-2)',
+    'Countdown': 'var(--blue)', 'Formation': 'var(--blue)',
+    'Stopped': 'var(--accent)', 'Finished': 'var(--muted-2)',
+  }[session.phase] || 'var(--muted)';
+  const remainingS = session.end_et != null && session.current_et != null
+    ? Math.max(0, session.end_et - session.current_et) : null;
+  const fmtClock = (s) => {
+    if (s == null) return '—';
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = Math.floor(s % 60);
+    return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`
+                 : `${m}:${String(ss).padStart(2,'0')}`;
+  };
+  const fmtGap = (t, l) => {
+    if (l && l > 0) return `+${l} lap${l > 1 ? 's' : ''}`;
+    if (!t || t <= 0) return '—';
+    return `+${t.toFixed(3)}`;
+  };
+  const fmtSec = (s) => (s == null || s <= 0) ? '—' : s.toFixed(3);
+
+  // Sort by place (live ranking)
+  const sorted = [...vehicles].sort((a, b) => (a.place || 999) - (b.place || 999));
+  // Find best lap overall and best sectors per class for purple/green coloring
+  const bestLapOverall = Math.min(...vehicles.filter(v => v.best_lap > 0).map(v => v.best_lap), Infinity);
+  const bestS1Overall = Math.min(...vehicles.filter(v => v.best_s1 > 0).map(v => v.best_s1), Infinity);
 
   root.innerHTML = `
     <div class="view-header">
-      <div><h2>Live Bridge</h2><p class="subtitle">Lecture temps réel via Shared Memory plugin</p></div>
+      <div><h2>Live Bridge</h2><p class="subtitle">${connected ? `Connecté · ${session.track || 'session vide'}` : 'Lecture temps réel via Shared Memory'}</p></div>
       <div class="view-actions">
         ${connected
           ? `<button class="btn danger" id="liveDisconnect">Déconnecter</button>`
@@ -2601,21 +2654,95 @@ function renderLive() {
       </div>
     </div>
 
-    <div class="live-status ${connected ? 'connected' : ''}">
-      <span class="live-status-dot"></span>
-      <div class="live-status-text">
-        <strong>${connected ? 'Connecté' : 'Hors ligne'}</strong>
-        <span class="muted">${connected ? `Dernière mise à jour : ${data.ts ? new Date(data.ts*1000).toLocaleTimeString('fr-FR') : '—'}` : 'Lancez le bridge Python pour recevoir la télémétrie en direct.'}</span>
+    ${connected && data.ok ? `
+      <div class="live-session-bar">
+        <div><span class="label">CIRCUIT</span><strong>${escapeHtml(session.track || '—')}</strong></div>
+        <div><span class="label">SESSION</span><strong>${escapeHtml(session.type || '—')}</strong></div>
+        <div><span class="label">PHASE</span><strong style="color:${phaseColor};">${escapeHtml(session.phase || '—')}</strong></div>
+        <div><span class="label">TEMPS RESTANT</span><strong>${fmtClock(remainingS)}</strong></div>
+        <div><span class="label">VOITURES</span><strong>${vehicles.length}</strong></div>
+        <div><span class="label">PISTE</span><strong>${session.weather ? session.weather.track.toFixed(0) : '—'}°C</strong><small>${session.weather ? `air ${session.weather.ambient.toFixed(0)}°C · pluie ${(session.weather.rain*100).toFixed(0)}%` : ''}</small></div>
       </div>
-      <code style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);">ws://localhost:8765</code>
-    </div>
+    ` : connected && data.error ? `
+      <div class="live-status">
+        <span class="live-status-dot" style="background:var(--accent-2);"></span>
+        <div class="live-status-text">
+          <strong>En attente du jeu</strong>
+          <span class="muted">${escapeHtml(data.message || 'Le bridge est connecté mais LMU ne fournit pas encore de données.')}</span>
+        </div>
+      </div>
+    ` : `
+      <div class="live-status ${connected ? 'connected' : ''}">
+        <span class="live-status-dot"></span>
+        <div class="live-status-text">
+          <strong>${connected ? 'Connecté · en attente données' : 'Hors ligne'}</strong>
+          <span class="muted">${connected ? 'Lance une session dans LMU.' : 'Lance le bridge ou télécharge le .exe (onglet Instructions).'}</span>
+        </div>
+        <code style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);">ws://localhost:8765</code>
+      </div>
+    `}
 
-    <div class="live-hud">
-      <div class="hud-tile"><div class="label">Speed</div><div class="value">${data.speed_kmh != null ? data.speed_kmh.toFixed(0) : '—'}</div><div class="sub">km/h</div></div>
-      <div class="hud-tile"><div class="label">RPM</div><div class="value">${data.rpm != null ? Math.round(data.rpm) : '—'}</div><div class="sub">tr/min</div></div>
-      <div class="hud-tile"><div class="label">Gear</div><div class="value">${data.gear != null ? (data.gear > 0 ? data.gear : data.gear === 0 ? 'N' : 'R') : '—'}</div><div class="sub">rapport</div></div>
-      <div class="hud-tile"><div class="label">Fuel</div><div class="value">${data.fuel_l != null ? data.fuel_l.toFixed(1) : '—'}</div><div class="sub">litres</div></div>
-    </div>
+    ${connected && data.ok && data.player ? `
+      <h3 class="section-title">Mon HUD</h3>
+      <div class="live-hud">
+        <div class="hud-tile"><div class="label">Speed</div><div class="value">${player.speed_kmh != null ? player.speed_kmh.toFixed(0) : '—'}</div><div class="sub">km/h</div></div>
+        <div class="hud-tile"><div class="label">RPM</div><div class="value" style="color:${player.rpm > player.rpm_max * 0.95 ? 'var(--accent)' : 'var(--text)'};">${player.rpm != null ? Math.round(player.rpm) : '—'}</div><div class="sub">${player.rpm_max ? `max ${Math.round(player.rpm_max)}` : 'tr/min'}</div></div>
+        <div class="hud-tile"><div class="label">Gear</div><div class="value">${player.gear != null ? (player.gear > 0 ? player.gear : player.gear === 0 ? 'N' : 'R') : '—'}</div><div class="sub">rapport</div></div>
+        <div class="hud-tile"><div class="label">Fuel</div><div class="value">${player.fuel_l != null ? player.fuel_l.toFixed(1) : '—'}</div><div class="sub">litres</div></div>
+        <div class="hud-tile"><div class="label">Throttle</div><div class="value" style="color:var(--green);">${player.throttle != null ? (player.throttle*100).toFixed(0) : '—'}</div><div class="sub">%</div></div>
+        <div class="hud-tile"><div class="label">Brake</div><div class="value" style="color:var(--accent);">${player.brake != null ? (player.brake*100).toFixed(0) : '—'}</div><div class="sub">%</div></div>
+        <div class="hud-tile"><div class="label">Engine</div><div class="value" style="color:${player.engine_temp > 110 ? 'var(--accent)' : 'var(--text)'};">${player.engine_temp != null ? player.engine_temp.toFixed(0) : '—'}</div><div class="sub">°C eau</div></div>
+        <div class="hud-tile"><div class="label">Oil</div><div class="value">${player.oil_temp != null ? player.oil_temp.toFixed(0) : '—'}</div><div class="sub">°C huile</div></div>
+      </div>
+    ` : ''}
+
+    ${connected && data.ok && vehicles.length ? `
+      <h3 class="section-title">Live Timing — ${vehicles.length} voitures</h3>
+      <div class="leaderboard"><table class="live-table">
+        <thead><tr>
+          <th class="pos">P</th>
+          <th>Pilote</th>
+          <th>Voiture</th>
+          <th>Cl.</th>
+          <th class="num">Tr</th>
+          <th class="num">S1</th>
+          <th class="num">S2</th>
+          <th class="num">Last</th>
+          <th class="num">Best</th>
+          <th class="num">Gap leader</th>
+          <th class="num">Gap next</th>
+          <th>Pit</th>
+        </tr></thead>
+        <tbody>
+          ${sorted.map(v => {
+            const isTSR = TSR_PATTERN.test(v.vehicle || '') || TSR_PATTERN.test(v.name || '');
+            const cls = [
+              v.is_player ? 'player' : '',
+              isTSR ? 'tsr' : '',
+              v.in_pits ? 'inpits' : '',
+              v.in_garage ? 'ingarage' : '',
+            ].filter(Boolean).join(' ');
+            const lastIsBest = v.last_lap && v.best_lap && Math.abs(v.last_lap - v.best_lap) < 0.001;
+            const purpleLap = v.best_lap > 0 && v.best_lap === bestLapOverall;
+            const purpleS1 = v.best_s1 > 0 && v.best_s1 === bestS1Overall;
+            return `<tr class="${cls}">
+              <td class="pos">${v.place || '—'}</td>
+              <td><strong>${escapeHtml(v.name)}</strong>${v.is_player ? ' <span style="color:var(--accent);font-size:10px;letter-spacing:1.5px;">YOU</span>' : ''}${isTSR ? ' <span class="badge endurance" style="font-size:9px;padding:1px 5px;">TSR</span>' : ''}</td>
+              <td><div style="font-size:12px;">${escapeHtml(v.vehicle)}</div><div style="color:var(--muted-2);font-size:10px;">${escapeHtml(v.control || '')}</div></td>
+              <td><span class="badge ${classifyClass(v.class)}" style="font-size:9px;padding:1px 5px;">${escapeHtml(v.class)}</span></td>
+              <td class="num">${v.lap}</td>
+              <td class="num" style="color:${purpleS1 ? 'var(--purple)' : 'var(--text)'}">${fmtSec(v.last_s1)}</td>
+              <td class="num">${fmtSec(v.last_s2)}</td>
+              <td class="num" style="color:${lastIsBest ? 'var(--purple)' : 'var(--text)'}">${v.last_lap ? formatLapTime(v.last_lap) : '—'}</td>
+              <td class="num" style="color:${purpleLap ? 'var(--purple)' : 'var(--accent)'};font-weight:700;">${v.best_lap ? formatLapTime(v.best_lap) : '—'}</td>
+              <td class="num">${v.place === 1 ? '—' : fmtGap(v.gap_lead_t, v.gap_lead_l)}</td>
+              <td class="num">${v.place === 1 ? '—' : fmtGap(v.gap_next_t, v.gap_next_l)}</td>
+              <td>${v.in_pits ? '<span style="color:var(--accent-2);font-size:11px;font-weight:700;">PIT</span>' : v.in_garage ? '<span style="color:var(--muted-2);font-size:11px;">BOX</span>' : `${v.pits}`}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table></div>
+    ` : ''}
 
     <div class="tabs-inline">
       <button class="tab-inline ${tab === 'instructions' ? 'active' : ''}" data-live-tab="instructions">Instructions</button>
