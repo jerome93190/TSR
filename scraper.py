@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """
-LMU Live Calendar — scraper / builder.
+TSR Command Center — full Le Mans Ultimate companion app.
 
-Fetches the official FIA WEC 2026 calendar (the championship LMU follows)
-and merges it with a curated list of LMU community events
-(daily / sprint / special). Produces a single self-contained `index.html`
-with CSS, JS and event data embedded inline.
+Single self-contained `index.html` with six views:
+  * Calendar      — WEC 2026 + LMU community events (live countdown)
+  * Garage        — drop your `.svm` setups, browse, diff, visualize
+  * Race Vault    — drop your `.xml` results, full session analytics
+  * Telemetry     — cross-session analytics, pace evolution, heatmaps
+  * Team TSR      — auto-filtered view for Team Spirit Racing pilots
+  * Live Bridge   — Python-based shared-memory → WebSocket bridge
+
+Everything is parsed in the browser (no server required). Calendar is
+pre-baked at build time. Setups & results are parsed via drag & drop and
+persisted in localStorage.
 
 Usage:
     python3 scraper.py
 
-Run it on a schedule (cron, GitHub Action, etc.) to keep the HTML fresh.
+Re-run anytime to refresh the embedded calendar.
 """
 
 import json
@@ -25,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 OUTPUT = ROOT / "index.html"
 
-USER_AGENT = "Mozilla/5.0 (compatible; LMU-Calendar-Scraper/1.0; +https://lemansultimate.com)"
+USER_AGENT = "Mozilla/5.0 (compatible; TSR-CommandCenter/2.0)"
 TIMEOUT = 15
 
 # ----------------------------------------------------------------------------
@@ -344,8 +351,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>LMU Live Calendar — Le Mans Ultimate</title>
-<meta name="description" content="Calendrier live des courses officielles Le Mans Ultimate : championnats, endurance, daily, événements spéciaux." />
+<title>TSR Command Center — Le Mans Ultimate</title>
+<meta name="description" content="TSR Command Center — calendrier WEC, garage de setups, vault de courses, télémétrie et live bridge pour Le Mans Ultimate." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
@@ -356,7 +363,7 @@ __CSS__
 <body>
 <header class="site-header">
   <div class="container header-inner">
-    <div class="brand">
+    <div class="brand" data-nav="calendar">
       <div class="brand-logo" aria-hidden="true">
         <svg viewBox="0 0 64 64" width="40" height="40">
           <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" stroke-width="3"/>
@@ -365,11 +372,23 @@ __CSS__
         </svg>
       </div>
       <div class="brand-text">
-        <h1>LMU Live Calendar</h1>
-        <p class="tagline">Calendrier officiel Le Mans Ultimate</p>
+        <h1>TSR <span class="brand-mono">CMD</span></h1>
+        <p class="tagline">Team Spirit Racing — Command Center</p>
       </div>
     </div>
+    <nav class="main-nav" role="tablist" aria-label="Navigation principale">
+      <button class="nav-tab" data-nav="calendar" role="tab">Calendar</button>
+      <button class="nav-tab" data-nav="garage" role="tab">Garage <span class="badge-count" id="badgeSetups">0</span></button>
+      <button class="nav-tab" data-nav="vault" role="tab">Race Vault <span class="badge-count" id="badgeSessions">0</span></button>
+      <button class="nav-tab" data-nav="telemetry" role="tab">Telemetry</button>
+      <button class="nav-tab" data-nav="team" role="tab">Team TSR</button>
+      <button class="nav-tab" data-nav="live" role="tab">Live</button>
+    </nav>
     <div class="header-meta">
+      <button class="header-action" id="dropTrigger" title="Importer XML/SVM">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+        <span>Import</span>
+      </button>
       <div class="clock" id="liveClock">
         <span class="clock-label">HEURE LOCALE</span>
         <span class="clock-time" id="clockTime">--:--:--</span>
@@ -388,40 +407,86 @@ __CSS__
   </div>
 </section>
 
+<div class="dropzone-overlay" id="dropzoneOverlay">
+  <div class="dropzone-content">
+    <svg viewBox="0 0 64 64" width="64" height="64" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M32 8v36m0 0l-12-12m12 12l12-12M8 56h48"/>
+    </svg>
+    <h3>Déposer vos fichiers</h3>
+    <p>XML résultats · SVM setups · JSON sauvegarde</p>
+  </div>
+</div>
+
+<input type="file" id="fileInput" multiple accept=".xml,.svm,.json" hidden />
+<div class="toast-container" id="toastContainer"></div>
+
 <main class="container">
-  <section class="controls">
-    <div class="filters" role="tablist" aria-label="Filtrer par catégorie">
-      <button class="filter active" data-filter="all">Tous</button>
-      <button class="filter" data-filter="championship">Championnat</button>
-      <button class="filter" data-filter="endurance">Endurance</button>
-      <button class="filter" data-filter="sprint">Sprint</button>
-      <button class="filter" data-filter="daily">Daily</button>
-      <button class="filter" data-filter="special">Spécial</button>
-    </div>
-    <div class="search">
-      <input type="search" id="searchInput" placeholder="Rechercher un circuit, un événement..." aria-label="Recherche" />
-    </div>
-    <div class="view-toggle">
-      <button id="toggleView" class="view-btn" aria-pressed="false">
-        <span class="view-on">Afficher passées</span>
-      </button>
-    </div>
+
+  <!-- ========== CALENDAR ========== -->
+  <section class="view view-calendar" data-view="calendar">
+    <section class="controls">
+      <div class="filters" role="tablist" aria-label="Filtrer par catégorie">
+        <button class="filter active" data-filter="all">Tous</button>
+        <button class="filter" data-filter="championship">Championnat</button>
+        <button class="filter" data-filter="endurance">Endurance</button>
+        <button class="filter" data-filter="sprint">Sprint</button>
+        <button class="filter" data-filter="daily">Daily</button>
+        <button class="filter" data-filter="special">Spécial</button>
+      </div>
+      <div class="search">
+        <input type="search" id="searchInput" placeholder="Rechercher un circuit, un événement..." aria-label="Recherche" />
+      </div>
+      <div class="view-toggle">
+        <button id="toggleView" class="view-btn" aria-pressed="false">
+          <span class="view-on">Afficher passées</span>
+        </button>
+      </div>
+    </section>
+    <section class="next-up" id="nextUp" aria-live="polite"></section>
+    <section class="calendar">
+      <h2 class="section-title">Calendrier</h2>
+      <div id="eventsList" class="events-list">
+        <p class="loading">Chargement du calendrier…</p>
+      </div>
+    </section>
   </section>
 
-  <section class="next-up" id="nextUp" aria-live="polite"></section>
-
-  <section class="calendar">
-    <h2 class="section-title">Calendrier</h2>
-    <div id="eventsList" class="events-list">
-      <p class="loading">Chargement du calendrier…</p>
-    </div>
+  <!-- ========== GARAGE ========== -->
+  <section class="view view-garage" data-view="garage" hidden>
+    <div id="garageRoot"></div>
   </section>
+
+  <!-- ========== RACE VAULT ========== -->
+  <section class="view view-vault" data-view="vault" hidden>
+    <div id="vaultRoot"></div>
+  </section>
+
+  <!-- ========== TELEMETRY ========== -->
+  <section class="view view-telemetry" data-view="telemetry" hidden>
+    <div id="telemetryRoot"></div>
+  </section>
+
+  <!-- ========== TEAM TSR ========== -->
+  <section class="view view-team" data-view="team" hidden>
+    <div id="teamRoot"></div>
+  </section>
+
+  <!-- ========== LIVE BRIDGE ========== -->
+  <section class="view view-live" data-view="live" hidden>
+    <div id="liveRoot"></div>
+  </section>
+
 </main>
 
 <footer class="site-footer">
   <div class="container footer-inner">
-    <p>Sources : FIA WEC officiel + événements LMU communautaires.</p>
-    <p class="muted">Généré le <span id="lastUpdated">__GENERATED__</span> · Application non affiliée à Motorsport Games / Studio 397.</p>
+    <p>Sources : FIA WEC officiel + événements LMU communautaires + données utilisateur (XML / SVM / Shared Memory).</p>
+    <p class="muted">
+      Généré le <span id="lastUpdated">__GENERATED__</span>
+      · <button class="link-btn" id="exportBtn">Export JSON</button>
+      · <button class="link-btn" id="resetBtn">Reset</button>
+      · TSR Command Center · Non-affilié Motorsport Games / Studio 397.
+    </p>
   </div>
 </footer>
 
@@ -439,16 +504,22 @@ CSS = r"""
   --bg: #0a0e14;
   --bg-2: #11161f;
   --bg-3: #1a212e;
+  --bg-4: #232c3d;
   --border: #232c3d;
+  --border-light: #2e3a52;
   --text: #e6ebf2;
   --muted: #8a95a8;
+  --muted-2: #5d6678;
   --accent: #ff3c3c;
   --accent-2: #ffb84d;
   --green: #3ddc84;
   --blue: #4da3ff;
   --purple: #b87cff;
+  --pink: #ff5ca0;
   --shadow: 0 8px 24px rgba(0,0,0,0.35);
+  --shadow-lg: 0 20px 60px rgba(0,0,0,0.5);
   --radius: 12px;
+  --radius-sm: 8px;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -457,15 +528,20 @@ html, body {
   font-family: 'Rajdhani', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   font-size: 16px; line-height: 1.4; min-height: 100vh;
 }
-.container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+button { font-family: inherit; }
+.container { max-width: 1400px; margin: 0 auto; padding: 0 24px; }
+
+/* ============================================================
+   HEADER + NAV
+   ============================================================ */
 .site-header {
   background: linear-gradient(180deg, #11161f 0%, #0a0e14 100%);
   border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 50;
   backdrop-filter: blur(8px);
 }
-.header-inner { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; gap: 24px; }
-.brand { display: flex; align-items: center; gap: 14px; }
+.header-inner { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; gap: 24px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 14px; cursor: pointer; }
 .brand-logo {
   color: var(--accent);
   display: grid; place-items: center;
@@ -473,15 +549,54 @@ html, body {
   background: rgba(255, 60, 60, 0.08);
   border: 1px solid rgba(255, 60, 60, 0.3);
   border-radius: 50%;
+  flex-shrink: 0;
 }
 .brand h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; }
-.tagline { margin: 0; color: var(--muted); font-size: 13px; letter-spacing: 0.3px; }
+.brand-mono { font-family: 'JetBrains Mono', monospace; color: var(--accent); }
+.tagline { margin: 0; color: var(--muted); font-size: 12px; letter-spacing: 0.3px; }
+
+.main-nav { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; justify-content: center; }
+.nav-tab {
+  background: transparent; border: 1px solid transparent;
+  color: var(--muted);
+  padding: 8px 14px; border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-weight: 600; font-size: 13px;
+  letter-spacing: 0.4px; text-transform: uppercase;
+  transition: all 0.15s ease;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.nav-tab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+.nav-tab.active { color: var(--text); background: var(--bg-2); border-color: var(--border); box-shadow: inset 0 -2px 0 var(--accent); }
+.badge-count {
+  display: inline-grid; place-items: center;
+  min-width: 18px; height: 18px; padding: 0 6px;
+  background: var(--bg-3); color: var(--muted);
+  font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700;
+  border-radius: 999px;
+}
+.nav-tab.active .badge-count { background: var(--accent); color: white; }
+
+.header-meta { display: flex; align-items: center; gap: 16px; }
+.header-action {
+  background: var(--bg-2); color: var(--text);
+  border: 1px solid var(--border);
+  padding: 8px 14px; border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-weight: 600; font-size: 13px;
+  letter-spacing: 0.5px; text-transform: uppercase;
+  display: inline-flex; align-items: center; gap: 8px;
+  transition: all 0.15s ease;
+}
+.header-action:hover { border-color: var(--accent); color: var(--accent); }
+
 .clock { display: flex; flex-direction: column; align-items: flex-end; font-family: 'JetBrains Mono', monospace; }
 .clock-label { font-size: 10px; letter-spacing: 2px; color: var(--muted); }
-.clock-time { font-size: 22px; font-weight: 600; color: var(--text); }
+.clock-time { font-size: 20px; font-weight: 600; color: var(--text); }
 .clock-tz { font-size: 11px; color: var(--muted); }
+
 .live-banner { background: linear-gradient(90deg, rgba(255,60,60,0.18), rgba(255,60,60,0)); border-bottom: 1px solid rgba(255,60,60,0.4); }
-.live-banner-inner { display: flex; align-items: center; gap: 12px; padding: 12px 24px; font-size: 15px; }
+.live-banner-inner { display: flex; align-items: center; gap: 12px; padding: 10px 24px; font-size: 14px; }
 .live-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 rgba(255,60,60,0.7); animation: pulse 1.6s infinite; }
 @keyframes pulse {
   0%   { box-shadow: 0 0 0 0 rgba(255,60,60,0.7); }
@@ -490,13 +605,68 @@ html, body {
 }
 .live-link { margin-left: auto; color: var(--accent-2); text-decoration: none; font-weight: 600; }
 .live-link:hover { text-decoration: underline; }
+
+/* ============================================================
+   DROPZONE OVERLAY + TOAST
+   ============================================================ */
+.dropzone-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(10,14,20,0.92);
+  backdrop-filter: blur(8px);
+  display: none;
+  pointer-events: none;
+}
+.dropzone-overlay.active { display: grid; place-items: center; pointer-events: all; }
+.dropzone-content {
+  border: 3px dashed var(--accent);
+  border-radius: 24px;
+  padding: 60px 80px;
+  text-align: center;
+  color: var(--text);
+  background: rgba(255,60,60,0.05);
+}
+.dropzone-content svg { color: var(--accent); margin-bottom: 16px; }
+.dropzone-content h3 { margin: 0 0 8px; font-size: 28px; letter-spacing: 1px; text-transform: uppercase; }
+.dropzone-content p { margin: 0; color: var(--muted); font-size: 15px; }
+
+.toast-container {
+  position: fixed; top: 80px; right: 24px; z-index: 100;
+  display: flex; flex-direction: column; gap: 10px;
+  pointer-events: none;
+}
+.toast {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  padding: 14px 18px;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  font-size: 14px;
+  pointer-events: all;
+  min-width: 280px;
+  max-width: 380px;
+  animation: slideIn 0.2s ease;
+}
+.toast.success { border-left-color: var(--green); }
+.toast.error { border-left-color: var(--accent); }
+.toast.info { border-left-color: var(--blue); }
+.toast strong { display: block; margin-bottom: 2px; }
+.toast small { color: var(--muted); }
+@keyframes slideIn {
+  from { transform: translateX(20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* ============================================================
+   CALENDAR (existing styles — adjusted)
+   ============================================================ */
 .controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; padding: 24px 0 16px; border-bottom: 1px solid var(--border); }
 .filters { display: flex; flex-wrap: wrap; gap: 8px; }
 .filter {
   background: var(--bg-2); color: var(--muted);
   border: 1px solid var(--border);
   padding: 8px 14px; border-radius: 999px;
-  cursor: pointer; font-family: inherit;
+  cursor: pointer;
   font-weight: 600; font-size: 13px;
   letter-spacing: 0.4px; text-transform: uppercase;
   transition: all 0.15s ease;
@@ -507,15 +677,15 @@ html, body {
 .search input {
   width: 100%; background: var(--bg-2);
   border: 1px solid var(--border); color: var(--text);
-  padding: 10px 14px; border-radius: 8px;
+  padding: 10px 14px; border-radius: var(--radius-sm);
   font-family: inherit; font-size: 14px;
 }
 .search input:focus { outline: none; border-color: var(--accent); }
 .view-btn {
   background: var(--bg-2); color: var(--muted);
   border: 1px solid var(--border);
-  padding: 10px 14px; border-radius: 8px;
-  font-family: inherit; font-weight: 600; font-size: 13px;
+  padding: 10px 14px; border-radius: var(--radius-sm);
+  font-weight: 600; font-size: 13px;
   cursor: pointer; transition: all 0.15s ease;
 }
 .view-btn:hover { color: var(--text); }
@@ -542,7 +712,7 @@ html, body {
 }
 .countdown-value { display: block; font-size: 28px; font-weight: 600; color: var(--text); line-height: 1; }
 .countdown-label { display: block; font-size: 10px; letter-spacing: 1.5px; color: var(--muted); margin-top: 6px; }
-.section-title { font-size: 14px; letter-spacing: 3px; text-transform: uppercase; color: var(--muted); margin: 36px 0 16px; }
+.section-title { font-size: 14px; letter-spacing: 3px; text-transform: uppercase; color: var(--muted); margin: 28px 0 16px; }
 .events-list { display: grid; gap: 12px; padding-bottom: 48px; }
 .event {
   background: var(--bg-2); border: 1px solid var(--border);
@@ -563,26 +733,339 @@ html, body {
 .event-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--muted); }
 .event-meta strong { color: var(--text); font-weight: 600; }
 .event-aside { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; min-width: 140px; }
-.badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; border: 1px solid; }
+.badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; border: 1px solid; white-space: nowrap; }
 .badge.championship { color: var(--accent);    border-color: rgba(255,60,60,0.4);  background: rgba(255,60,60,0.08); }
 .badge.endurance    { color: var(--accent-2);  border-color: rgba(255,184,77,0.4); background: rgba(255,184,77,0.08); }
 .badge.sprint       { color: var(--blue);      border-color: rgba(77,163,255,0.4); background: rgba(77,163,255,0.08); }
 .badge.daily        { color: var(--green);     border-color: rgba(61,220,132,0.4); background: rgba(61,220,132,0.08); }
 .badge.special      { color: var(--purple);    border-color: rgba(184,124,255,0.4);background: rgba(184,124,255,0.08); }
+.badge.hypercar     { color: var(--accent);    border-color: rgba(255,60,60,0.4);  background: rgba(255,60,60,0.08); }
+.badge.lmp2         { color: var(--blue);      border-color: rgba(77,163,255,0.4); background: rgba(77,163,255,0.08); }
+.badge.gt3          { color: var(--accent-2);  border-color: rgba(255,184,77,0.4); background: rgba(255,184,77,0.08); }
+.badge.lmgt3        { color: var(--accent-2);  border-color: rgba(255,184,77,0.4); background: rgba(255,184,77,0.08); }
 .event-time { font-family: 'JetBrains Mono', monospace; font-size: 14px; color: var(--text); }
 .event-status { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
 .event.live .event-status { color: var(--accent); font-weight: 700; }
 .event.live .event-status::before { content: "● "; animation: blink 1.2s infinite; }
-@keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0.2; }
+@keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.2; } }
+
+/* ============================================================
+   SHARED COMPONENTS
+   ============================================================ */
+.view { padding: 24px 0; }
+.view-header {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  flex-wrap: wrap; gap: 16px; margin-bottom: 24px;
+  padding-bottom: 16px; border-bottom: 1px solid var(--border);
 }
-.site-footer { border-top: 1px solid var(--border); margin-top: auto; padding: 24px 0; }
-.footer-inner { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--muted); }
+.view-header h2 {
+  margin: 0; font-size: 28px; font-weight: 700;
+  letter-spacing: 0.5px; text-transform: uppercase;
+}
+.view-header .subtitle { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
+.view-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.empty-state {
+  text-align: center; padding: 80px 24px;
+  border: 2px dashed var(--border); border-radius: var(--radius);
+  background: rgba(255,255,255,0.01);
+}
+.empty-state-icon { color: var(--muted-2); margin-bottom: 16px; }
+.empty-state h3 { margin: 0 0 8px; font-size: 22px; }
+.empty-state p { margin: 0 0 16px; color: var(--muted); font-size: 14px; }
+.empty-state-cta {
+  background: var(--accent); color: white;
+  border: none; padding: 12px 24px; border-radius: var(--radius-sm);
+  font-weight: 700; font-size: 13px; letter-spacing: 1px; text-transform: uppercase;
+  cursor: pointer; transition: all 0.15s ease;
+}
+.empty-state-cta:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+
+.btn {
+  background: var(--bg-2); color: var(--text);
+  border: 1px solid var(--border); padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  font-weight: 600; font-size: 13px;
+  letter-spacing: 0.4px; text-transform: uppercase;
+  cursor: pointer; transition: all 0.15s ease;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
+.btn.primary:hover { background: #ff5252; border-color: #ff5252; }
+.btn.ghost { background: transparent; }
+.btn.danger { color: var(--accent); border-color: rgba(255,60,60,0.4); }
+.btn.small { padding: 4px 10px; font-size: 11px; }
+.link-btn {
+  background: none; border: none; color: var(--accent-2);
+  cursor: pointer; padding: 0; font-size: inherit; font-family: inherit;
+  text-decoration: underline; text-decoration-style: dotted;
+}
+.link-btn:hover { color: var(--accent); }
+
+.kbd {
+  display: inline-block; padding: 2px 6px;
+  background: var(--bg-3); border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+}
+
 .muted { color: var(--muted); }
 .loading { color: var(--muted); padding: 24px; text-align: center; }
-@media (max-width: 720px) {
+
+/* ============================================================
+   GARAGE — SETUPS
+   ============================================================ */
+.garage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+  padding-bottom: 48px;
+}
+.setup-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.setup-card:hover { transform: translateY(-2px); border-color: var(--accent); box-shadow: var(--shadow); }
+.setup-card.selected { border-color: var(--accent); background: rgba(255,60,60,0.04); }
+.setup-card.compare { border-color: var(--blue); background: rgba(77,163,255,0.04); }
+.setup-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.setup-car { font-weight: 700; font-size: 16px; letter-spacing: 0.3px; }
+.setup-class { font-size: 11px; letter-spacing: 1.5px; color: var(--muted); text-transform: uppercase; }
+.setup-filename { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted); word-break: break-all; }
+.setup-basic-bars { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.setup-basic-bar { display: grid; grid-template-columns: 80px 1fr 32px; align-items: center; gap: 10px; font-size: 12px; }
+.setup-basic-bar .label { color: var(--muted); text-transform: uppercase; letter-spacing: 1px; font-size: 10px; }
+.setup-basic-bar .bar { height: 6px; background: var(--bg-3); border-radius: 3px; position: relative; overflow: hidden; }
+.setup-basic-bar .bar::after {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  border-radius: 3px;
+  width: var(--w, 50%);
+}
+.setup-basic-bar .val { font-family: 'JetBrains Mono', monospace; text-align: right; }
+.setup-card-actions { display: flex; gap: 8px; margin-top: auto; }
+
+.setup-detail {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 24px;
+  padding-bottom: 48px;
+}
+.setup-detail-side { display: flex; flex-direction: column; gap: 16px; }
+.suspension-diagram {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px;
+}
+.suspension-diagram h4 { margin: 0 0 16px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); }
+.car-svg { width: 100%; height: auto; }
+.corner-card {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px;
+}
+.corner-card h5 { margin: 0 0 10px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); }
+.corner-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.kv { display: flex; flex-direction: column; gap: 2px; }
+.kv-label { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.kv-value { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text); }
+.section-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+.section-block {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+}
+.section-block h4 { margin: 0 0 10px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-2); }
+.kv-list { display: grid; gap: 6px; }
+.kv-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.kv-row .k { color: var(--muted); }
+.kv-row .v { font-family: 'JetBrains Mono', monospace; }
+.kv-row.diff .v { color: var(--accent-2); font-weight: 700; }
+
+/* Setup compare */
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.compare-col { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.compare-col h3 { margin: 0 0 6px; font-size: 16px; }
+.compare-col .filename { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted); margin-bottom: 12px; }
+
+/* ============================================================
+   RACE VAULT — SESSIONS
+   ============================================================ */
+.session-list { display: grid; gap: 12px; padding-bottom: 48px; }
+.session-card {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px 20px;
+  display: grid; grid-template-columns: 90px 1fr auto auto; gap: 20px;
+  align-items: center; cursor: pointer;
+  transition: all 0.15s ease;
+}
+.session-card:hover { transform: translateY(-1px); border-color: var(--accent); }
+.session-card.has-player { border-left: 4px solid var(--accent); }
+.session-meta-pill { display: inline-block; padding: 2px 8px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--muted); }
+.session-stat { text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+.session-stat .label { display: block; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+.session-stat .value { font-size: 16px; font-weight: 600; color: var(--text); }
+.session-stat .value.best { color: var(--accent); }
+
+/* Session detail */
+.session-detail { padding-bottom: 48px; }
+.session-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.summary-card {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px;
+}
+.summary-card .label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.summary-card .value { font-size: 22px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+.summary-card .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+.leaderboard {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+.leaderboard table { width: 100%; border-collapse: collapse; }
+.leaderboard th, .leaderboard td { padding: 10px 14px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--border); }
+.leaderboard th { background: var(--bg-3); color: var(--muted); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 700; }
+.leaderboard tr.player { background: rgba(255,60,60,0.06); }
+.leaderboard tr.tsr { background: rgba(255,184,77,0.04); }
+.leaderboard tr:hover { background: rgba(255,255,255,0.02); cursor: pointer; }
+.leaderboard tr.selected-rival { background: rgba(77,163,255,0.08); }
+.leaderboard td.num { font-family: 'JetBrains Mono', monospace; }
+.leaderboard td.best { color: var(--accent); font-weight: 700; }
+.leaderboard .pos { width: 36px; text-align: center; font-weight: 700; }
+.leaderboard .dq { color: var(--accent); font-size: 10px; padding: 1px 5px; border: 1px solid var(--accent); border-radius: 3px; margin-left: 4px; }
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.chart-box {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+}
+.chart-box h4 { margin: 0 0 12px; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); }
+.chart-svg { width: 100%; height: auto; display: block; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.chart-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+
+.incident-list { max-height: 300px; overflow-y: auto; padding-right: 8px; }
+.incident-item {
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+  display: grid; grid-template-columns: 60px 1fr; gap: 10px;
+  font-size: 13px;
+}
+.incident-item .time { font-family: 'JetBrains Mono', monospace; color: var(--muted); }
+.incident-item.contact { color: var(--accent); }
+.incident-item.tracklimits { color: var(--accent-2); }
+
+/* ============================================================
+   TELEMETRY (cross-session analytics)
+   ============================================================ */
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+  padding-bottom: 48px;
+}
+
+/* ============================================================
+   TEAM TSR
+   ============================================================ */
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.team-card {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-left: 4px solid var(--accent-2);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+.team-card h3 { margin: 0 0 6px; font-size: 18px; }
+.team-card .car { color: var(--muted); font-size: 13px; }
+.team-card .team-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.team-card .stat { font-family: 'JetBrains Mono', monospace; }
+.team-card .stat-label { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.team-card .stat-value { font-size: 18px; font-weight: 700; }
+
+/* ============================================================
+   LIVE BRIDGE
+   ============================================================ */
+.live-status {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px;
+  margin-bottom: 16px;
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px;
+}
+.live-status-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted-2); }
+.live-status.connected .live-status-dot { background: var(--green); box-shadow: 0 0 12px var(--green); animation: pulse 1.6s infinite; }
+.live-status-text { font-size: 14px; }
+.live-status-text strong { display: block; margin-bottom: 2px; }
+.code-block {
+  background: #050709; border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px; line-height: 1.6;
+  overflow-x: auto; max-height: 480px; overflow-y: auto;
+  color: #cdd5e0;
+}
+.code-block .kw { color: #ff79c6; }
+.code-block .str { color: #f1fa8c; }
+.code-block .com { color: #6272a4; font-style: italic; }
+.code-block .num { color: #bd93f9; }
+.code-block .fn { color: #50fa7b; }
+.live-hud {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px; margin-bottom: 24px;
+}
+.hud-tile {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px; text-align: center;
+}
+.hud-tile .label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.hud-tile .value { font-family: 'JetBrains Mono', monospace; font-size: 28px; font-weight: 700; }
+.hud-tile .sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+.tabs-inline { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.tab-inline {
+  background: transparent; border: none; padding: 10px 14px;
+  color: var(--muted); cursor: pointer;
+  font-weight: 600; font-size: 13px;
+  letter-spacing: 0.5px; text-transform: uppercase;
+  border-bottom: 2px solid transparent;
+}
+.tab-inline:hover { color: var(--text); }
+.tab-inline.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.site-footer { border-top: 1px solid var(--border); margin-top: auto; padding: 24px 0; }
+.footer-inner { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--muted); }
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width: 980px) {
   .header-inner { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .main-nav { width: 100%; justify-content: flex-start; overflow-x: auto; }
   .clock { align-items: flex-start; }
   .featured-card { grid-template-columns: 1fr; }
   .countdown { justify-content: flex-start; flex-wrap: wrap; }
@@ -591,6 +1074,10 @@ html, body {
   .event-date .day { font-size: 22px; }
   .event-aside { align-items: flex-start; }
   .featured-title { font-size: 22px; }
+  .setup-detail { grid-template-columns: 1fr; }
+  .compare-grid { grid-template-columns: 1fr; }
+  .session-card { grid-template-columns: 1fr; gap: 8px; }
+  .session-stat { text-align: left; }
 }
 """
 
@@ -598,98 +1085,559 @@ html, body {
 JS = r"""
 'use strict';
 
-const CATEGORY_LABELS = {
-  championship: 'Championnat',
-  endurance: 'Endurance',
-  sprint: 'Sprint',
-  daily: 'Daily',
-  special: 'Spécial'
-};
-
-const MONTH_FR = ['JAN','FEV','MAR','AVR','MAI','JUIN','JUIL','AOU','SEP','OCT','NOV','DEC'];
-
-const state = {
+/* ============================================================
+   STATE & STORAGE
+   ============================================================ */
+const State = {
+  view: 'calendar',
   events: [],
   filter: 'all',
   search: '',
-  showPast: false
+  showPast: false,
+  sessions: {},
+  setups: {},
+  selected: {
+    sessionId: null,
+    rivalIdxs: [],
+    setupId: null,
+    compareSetupId: null,
+    liveTab: 'instructions',
+  },
+  liveSocket: null,
+  liveData: null,
 };
 
-function boot() {
-  startClock();
-  try {
-    const data = JSON.parse(document.getElementById('eventsData').textContent);
-    state.events = (data.events || []).map(e => ({
-      ...e,
-      start: new Date(e.start),
-      end: new Date(e.end)
-    })).sort((a,b) => a.start - b.start);
-  } catch (err) {
-    console.error('Failed to parse events data', err);
-    document.getElementById('eventsList').innerHTML =
-      '<p class="loading">Erreur de lecture des données.</p>';
-    return;
+const Storage = {
+  KEY: 'tsr-cc-v2',
+  save() {
+    try {
+      const data = { sessions: State.sessions, setups: State.setups, v: 2 };
+      localStorage.setItem(this.KEY, JSON.stringify(data));
+    } catch (e) {
+      toast('error', 'Sauvegarde impossible', e.message);
+    }
+  },
+  load() {
+    try {
+      const raw = localStorage.getItem(this.KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      State.sessions = data.sessions || {};
+      State.setups = data.setups || {};
+    } catch (e) {
+      console.error('Storage load failed', e);
+    }
+  },
+  exportJSON() {
+    const data = { sessions: State.sessions, setups: State.setups, exported: new Date().toISOString(), v: 2 };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `tsr-cc-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('success', 'Export téléchargé');
+  },
+  reset() {
+    if (!confirm('Supprimer toutes les sessions et setups en local ?')) return;
+    State.sessions = {};
+    State.setups = {};
+    localStorage.removeItem(this.KEY);
+    State.selected = { sessionId: null, rivalIdxs: [], setupId: null, compareSetupId: null, liveTab: 'instructions' };
+    refresh();
+    toast('info', 'Données effacées');
+  },
+};
+
+/* ============================================================
+   CONSTANTS
+   ============================================================ */
+const CATEGORY_LABELS = {
+  championship: 'Championnat', endurance: 'Endurance',
+  sprint: 'Sprint', daily: 'Daily', special: 'Spécial',
+};
+const MONTH_FR = ['JAN','FEV','MAR','AVR','MAI','JUIN','JUIL','AOU','SEP','OCT','NOV','DEC'];
+const TSR_PATTERN = /\bTSR\b|Team Spirit Racing/i;
+const CLASS_COLORS = {
+  'HYPERCAR': '#ff3c3c', 'LMP2': '#4da3ff', 'GT3': '#ffb84d', 'LMGT3': '#ffb84d',
+};
+const RIVAL_COLORS = ['#4da3ff', '#3ddc84', '#b87cff', '#ff5ca0', '#ff7f50', '#7fffd4'];
+
+/* ============================================================
+   UTILITIES
+   ============================================================ */
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function formatLapTime(seconds) {
+  if (seconds == null || isNaN(seconds) || seconds <= 0) return '—';
+  const m = Math.floor(seconds / 60);
+  const s = (seconds - m * 60).toFixed(3);
+  return m > 0 ? `${m}:${s.padStart(6,'0')}` : `${s}`;
+}
+function formatTime(seconds) {
+  if (seconds == null || isNaN(seconds)) return '—';
+  return seconds.toFixed(3);
+}
+function formatRelative(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ${m % 60}min`;
+  return `${Math.floor(h / 24)} jours`;
+}
+function formatDateTime(d) {
+  return d.toLocaleString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function shortDate(d) {
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+function uid(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+function classifyClass(carClass) {
+  if (!carClass) return '';
+  const c = carClass.toUpperCase();
+  if (c.includes('HYPER')) return 'hypercar';
+  if (c.includes('LMP2')) return 'lmp2';
+  if (c.includes('LMGT3') || c === 'GT3') return 'lmgt3';
+  return c.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/* ============================================================
+   TOAST NOTIFICATIONS
+   ============================================================ */
+function toast(type, title, body) {
+  const c = document.getElementById('toastContainer');
+  const div = document.createElement('div');
+  div.className = `toast ${type}`;
+  div.innerHTML = `<strong>${escapeHtml(title)}</strong>${body ? `<small>${escapeHtml(body)}</small>` : ''}`;
+  c.appendChild(div);
+  setTimeout(() => { div.style.opacity = '0'; div.style.transform = 'translateX(20px)'; }, 3000);
+  setTimeout(() => div.remove(), 3300);
+}
+
+/* ============================================================
+   XML PARSER (rFactor 2 / LMU race results)
+   ============================================================ */
+function parseResultsXML(xmlString, filename) {
+  const doc = new DOMParser().parseFromString(xmlString, 'application/xml');
+  const err = doc.querySelector('parsererror');
+  if (err) throw new Error('XML invalide : ' + err.textContent.slice(0, 80));
+  const root = doc.querySelector('RaceResults');
+  if (!root) throw new Error('Pas de balise <RaceResults>');
+
+  const txt = (parent, tag) => { const el = parent.querySelector(`:scope > ${tag}`); return el ? el.textContent.trim() : ''; };
+  const num = (parent, tag) => parseFloat(txt(parent, tag)) || 0;
+
+  const sessionTypes = ['TestDay','Practice1','Practice2','Practice3','Practice4','Qualify1','Qualify2','Qualify','WarmUp','Race1','Race2','Race'];
+  let sessionEl = null, sessionType = '';
+  for (const t of sessionTypes) {
+    const el = root.querySelector(`:scope > ${t}`);
+    if (el) { sessionEl = el; sessionType = t; break; }
   }
-  bindControls();
-  render();
-  setInterval(render, 1000);
-}
+  if (!sessionEl) throw new Error('Aucune session trouvée dans le XML');
 
-function startClock() {
-  const timeEl = document.getElementById('clockTime');
-  const tzEl = document.getElementById('clockTz');
-  tzEl.textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const tick = () => {
-    timeEl.textContent = new Date().toLocaleTimeString('fr-FR', { hour12: false });
+  const dt = parseInt(txt(sessionEl, 'DateTime') || txt(root, 'DateTime'), 10) * 1000;
+  const session = {
+    id: uid('sess'),
+    filename,
+    importedAt: Date.now(),
+    track: txt(root, 'TrackVenue') || txt(root, 'TrackCourse') || 'Unknown',
+    trackEvent: txt(root, 'TrackEvent'),
+    trackLength: num(root, 'TrackLength'),
+    sessionType,
+    timestamp: dt || Date.now(),
+    timeString: txt(sessionEl, 'TimeString') || txt(root, 'TimeString'),
+    raceTime: num(root, 'RaceTime'),
+    raceLaps: num(root, 'RaceLaps'),
+    fuelMult: num(root, 'FuelMult') || 1,
+    tireMult: num(root, 'TireMult') || 1,
+    damageMult: num(root, 'DamageMult') || 100,
+    gameVersion: txt(root, 'GameVersion'),
+    drivers: [],
+    streamEvents: [],
   };
-  tick();
-  setInterval(tick, 1000);
+
+  // Parse stream events (incidents, track limits, sectors)
+  const stream = sessionEl.querySelector(':scope > Stream');
+  if (stream) {
+    for (const child of stream.children) {
+      const tag = child.tagName;
+      const et = parseFloat(child.getAttribute('et')) || 0;
+      const text = child.textContent.trim();
+      if (tag === 'Incident') {
+        const m = text.match(/^(.+?)\((\d+)\) reported contact \(([\d.]+)\) with another vehicle (.+?)\((\d+)\)$/);
+        if (m) {
+          session.streamEvents.push({
+            type: 'contact', et,
+            driver: m[1], driverId: parseInt(m[2], 10),
+            force: parseFloat(m[3]),
+            otherDriver: m[4], otherDriverId: parseInt(m[5], 10),
+            text,
+          });
+        } else {
+          session.streamEvents.push({ type: 'incident', et, text });
+        }
+      } else if (tag === 'TrackLimits') {
+        session.streamEvents.push({
+          type: 'tracklimits', et,
+          driver: child.getAttribute('Driver'),
+          driverId: parseInt(child.getAttribute('ID'), 10),
+          lap: parseInt(child.getAttribute('Lap'), 10) || 0,
+          warningPoints: parseFloat(child.getAttribute('WarningPoints')) || 0,
+          currentPoints: parseFloat(child.getAttribute('CurrentPoints')) || 0,
+          message: text,
+        });
+      }
+      // Score and Sector events kept light to limit storage size
+    }
+  }
+
+  // Parse drivers
+  const driverEls = sessionEl.querySelectorAll(':scope > Driver');
+  driverEls.forEach((dEl, idx) => {
+    const driver = {
+      idx,
+      name: txt(dEl, 'Name'),
+      vehFile: txt(dEl, 'VehFile'),
+      vehName: txt(dEl, 'VehName'),
+      category: txt(dEl, 'Category'),
+      carType: txt(dEl, 'CarType'),
+      carClass: txt(dEl, 'CarClass'),
+      carNumber: txt(dEl, 'CarNumber'),
+      teamName: txt(dEl, 'TeamName'),
+      isPlayer: txt(dEl, 'isPlayer') === '1',
+      position: parseInt(txt(dEl, 'Position'), 10) || 0,
+      classPosition: parseInt(txt(dEl, 'ClassPosition'), 10) || 0,
+      bestLapTime: num(dEl, 'BestLapTime'),
+      laps: num(dEl, 'Laps'),
+      pitstops: num(dEl, 'Pitstops'),
+      finishStatus: txt(dEl, 'FinishStatus'),
+      lapData: [],
+    };
+    const aidsEl = dEl.querySelector(':scope > ControlAndAids');
+    if (aidsEl) driver.aids = aidsEl.textContent.trim();
+    const lapEls = dEl.querySelectorAll(':scope > Lap');
+    lapEls.forEach(lEl => {
+      const lap = {
+        num: parseInt(lEl.getAttribute('num'), 10),
+        p: parseInt(lEl.getAttribute('p'), 10),
+        et: parseFloat(lEl.getAttribute('et')),
+        s1: parseFloat(lEl.getAttribute('s1')),
+        s2: parseFloat(lEl.getAttribute('s2')),
+        s3: parseFloat(lEl.getAttribute('s3')),
+        topspeed: parseFloat(lEl.getAttribute('topspeed')),
+        fuel: parseFloat(lEl.getAttribute('fuel')),
+        fuelUsed: parseFloat(lEl.getAttribute('fuelUsed')),
+        ve: parseFloat(lEl.getAttribute('ve')),
+        veUsed: parseFloat(lEl.getAttribute('veUsed')),
+        twfl: parseFloat(lEl.getAttribute('twfl')),
+        twfr: parseFloat(lEl.getAttribute('twfr')),
+        twrl: parseFloat(lEl.getAttribute('twrl')),
+        twrr: parseFloat(lEl.getAttribute('twrr')),
+        compound: (lEl.getAttribute('fcompound') || '').split(',')[1] || '',
+        pit: lEl.getAttribute('pit') === '1',
+        time: parseFloat(lEl.textContent),
+      };
+      driver.lapData.push(lap);
+    });
+    session.drivers.push(driver);
+  });
+
+  return session;
 }
 
-function bindControls() {
-  document.querySelectorAll('.filter').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.filter').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      state.filter = btn.dataset.filter;
-      render();
+/* ============================================================
+   SVM PARSER (rFactor / LMU setup files)
+   ============================================================ */
+function parseSetupSVM(text, filename) {
+  const setup = {
+    id: uid('setup'),
+    filename,
+    importedAt: Date.now(),
+    vehicleClass: '',
+    vehicle: '',
+    car: '',
+    notes: '',
+    sections: {},
+    basic: {},
+  };
+  const lines = text.split(/\r?\n/);
+  let currentSection = '_HEADER';
+  setup.sections[currentSection] = {};
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    // Section
+    const sec = line.match(/^\[(.+)\]$/);
+    if (sec) {
+      currentSection = sec[1];
+      setup.sections[currentSection] = {};
+      continue;
+    }
+    // Comment-only lines
+    if (line.startsWith('//')) continue;
+    // Key=value with optional trailing //comment
+    const m = line.match(/^([^=]+?)=("([^"]*)"|([^\/]*))(?:\/\/(.*))?$/);
+    if (!m) continue;
+    const key = m[1].trim();
+    const rawVal = (m[3] !== undefined ? m[3] : (m[4] || '')).trim();
+    const display = (m[5] || '').trim();
+    setup.sections[currentSection][key] = { raw: rawVal, display };
+    if (key === 'VehicleClassSetting') setup.vehicleClass = rawVal.replace(/"/g, '');
+  }
+  // Parse vehicle from header (path or class)
+  const header = setup.sections._HEADER || {};
+  // Look for VEH path in raw lines (it's in a comment)
+  const vehLine = lines.find(l => /\/\/VEH=/i.test(l));
+  if (vehLine) {
+    const m = vehLine.match(/\/\/VEH=.*[\\/]([^\\/]+)\.VEH/i);
+    if (m) setup.car = m[1];
+  }
+  if (!setup.car && setup.vehicleClass) {
+    setup.car = setup.vehicleClass.split(' ').slice(1).join(' ').replace(/_/g, ' ');
+  }
+  setup.vehicle = setup.vehicleClass || setup.car || filename.replace(/\.svm$/i, '');
+  // BASIC section parsing
+  const basic = setup.sections.BASIC || {};
+  setup.basic = {
+    Downforce: parseFloat((basic.Downforce || {}).raw) || 0.5,
+    Balance: parseFloat((basic.Balance || {}).raw) || 0.5,
+    Ride: parseFloat((basic.Ride || {}).raw) || 0.5,
+    Gearing: parseFloat((basic.Gearing || {}).raw) || 0.5,
+    Custom: parseFloat((basic.Custom || {}).raw) || 0,
+  };
+  // Notes
+  const general = setup.sections.GENERAL || {};
+  setup.notes = (general.Notes && general.Notes.raw || '').replace(/^"|"$/g, '');
+  return setup;
+}
+
+/* ============================================================
+   FILE HANDLING
+   ============================================================ */
+async function handleFiles(files) {
+  let okSetup = 0, okSession = 0, errs = 0;
+  for (const f of files) {
+    try {
+      const text = await f.text();
+      const lower = f.name.toLowerCase();
+      if (lower.endsWith('.svm')) {
+        const setup = parseSetupSVM(text, f.name);
+        State.setups[setup.id] = setup;
+        okSetup++;
+      } else if (lower.endsWith('.xml')) {
+        const session = parseResultsXML(text, f.name);
+        State.sessions[session.id] = session;
+        okSession++;
+      } else if (lower.endsWith('.json')) {
+        const data = JSON.parse(text);
+        if (data.sessions) Object.assign(State.sessions, data.sessions);
+        if (data.setups) Object.assign(State.setups, data.setups);
+        toast('success', 'Backup importé', `${Object.keys(data.sessions || {}).length} sessions, ${Object.keys(data.setups || {}).length} setups`);
+      } else {
+        toast('error', 'Format inconnu', f.name);
+        errs++;
+      }
+    } catch (e) {
+      console.error(e);
+      toast('error', `Erreur ${f.name}`, e.message);
+      errs++;
+    }
+  }
+  if (okSetup) toast('success', `${okSetup} setup(s) importé(s)`);
+  if (okSession) toast('success', `${okSession} session(s) importée(s)`);
+  Storage.save();
+  refresh();
+}
+
+function setupDropzone() {
+  const overlay = document.getElementById('dropzoneOverlay');
+  const input = document.getElementById('fileInput');
+  let counter = 0;
+  window.addEventListener('dragenter', (e) => {
+    if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    counter++;
+    overlay.classList.add('active');
+  });
+  window.addEventListener('dragover', (e) => { if (overlay.classList.contains('active')) e.preventDefault(); });
+  window.addEventListener('dragleave', () => { counter--; if (counter <= 0) { counter = 0; overlay.classList.remove('active'); } });
+  window.addEventListener('drop', (e) => {
+    if (!overlay.classList.contains('active')) return;
+    e.preventDefault();
+    counter = 0;
+    overlay.classList.remove('active');
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length) handleFiles(files);
+  });
+  document.getElementById('dropTrigger').addEventListener('click', () => input.click());
+  input.addEventListener('change', (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length) handleFiles(files);
+    input.value = '';
+  });
+}
+
+/* ============================================================
+   ROUTING
+   ============================================================ */
+function navigate(view) {
+  State.view = view;
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.nav === view));
+  document.querySelectorAll('.view').forEach(v => v.hidden = (v.dataset.view !== view));
+  refresh();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function setupNav() {
+  document.querySelectorAll('[data-nav]').forEach(el => {
+    el.addEventListener('click', () => navigate(el.dataset.nav));
+  });
+}
+
+/* ============================================================
+   CHART HELPERS (inline SVG)
+   ============================================================ */
+function chartFrame(width, height, padding, content) {
+  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}</svg>`;
+}
+
+function lineChart(series, opts = {}) {
+  const W = opts.width || 600, H = opts.height || 280;
+  const pad = { l: 50, r: 16, t: 16, b: 30, ...(opts.padding || {}) };
+  const allPoints = series.flatMap(s => s.points);
+  if (!allPoints.length) return `<div class="loading">Pas de données.</div>`;
+  const xs = allPoints.map(p => p.x), ys = allPoints.map(p => p.y);
+  const xMin = opts.xMin ?? Math.min(...xs), xMax = opts.xMax ?? Math.max(...xs);
+  const yMin = opts.yMin ?? Math.min(...ys), yMax = opts.yMax ?? Math.max(...ys);
+  const yPad = (yMax - yMin) * 0.05 || 1;
+  const ymin = opts.yMin ?? (yMin - yPad), ymax = opts.yMax ?? (yMax + yPad);
+  const xRange = (xMax - xMin) || 1;
+  const yRange = (ymax - ymin) || 1;
+  const sx = (x) => pad.l + (x - xMin) / xRange * (W - pad.l - pad.r);
+  const sy = (y) => H - pad.b - (y - ymin) / yRange * (H - pad.t - pad.b);
+  // Grid
+  const ticks = 5;
+  let grid = '';
+  for (let i = 0; i <= ticks; i++) {
+    const v = ymin + (ymax - ymin) * i / ticks;
+    const y = sy(v);
+    grid += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="#232c3d" stroke-width="0.5"/>`;
+    grid += `<text x="${pad.l - 6}" y="${y + 3}" text-anchor="end" fill="#5d6678" font-size="10" font-family="JetBrains Mono">${opts.yFormat ? opts.yFormat(v) : v.toFixed(1)}</text>`;
+  }
+  for (let i = 0; i <= ticks; i++) {
+    const v = xMin + (xMax - xMin) * i / ticks;
+    const x = sx(v);
+    grid += `<text x="${x}" y="${H - pad.b + 16}" text-anchor="middle" fill="#5d6678" font-size="10" font-family="JetBrains Mono">${opts.xFormat ? opts.xFormat(v) : Math.round(v)}</text>`;
+  }
+  // Lines
+  let lines = '';
+  series.forEach((s, i) => {
+    const pts = s.points;
+    if (!pts.length) return;
+    const d = pts.map((p, j) => `${j === 0 ? 'M' : 'L'} ${sx(p.x)} ${sy(p.y)}`).join(' ');
+    lines += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.strokeWidth || 2}" stroke-linejoin="round" stroke-linecap="round" opacity="${s.opacity || 1}"/>`;
+    if (s.dots) {
+      pts.forEach(p => {
+        lines += `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="3" fill="${s.color}"/>`;
+      });
+    }
+  });
+  return chartFrame(W, H, pad, grid + lines);
+}
+
+function barChart(values, opts = {}) {
+  const W = opts.width || 600, H = opts.height || 200;
+  const pad = { l: 50, r: 16, t: 16, b: 40, ...(opts.padding || {}) };
+  if (!values.length) return `<div class="loading">Pas de données.</div>`;
+  const max = opts.yMax ?? Math.max(...values.map(v => v.value));
+  const min = opts.yMin ?? 0;
+  const bw = (W - pad.l - pad.r) / values.length * 0.7;
+  const gap = (W - pad.l - pad.r) / values.length * 0.3;
+  const sy = (y) => H - pad.b - (y - min) / (max - min) * (H - pad.t - pad.b);
+  let bars = '';
+  let labels = '';
+  values.forEach((v, i) => {
+    const x = pad.l + i * (bw + gap) + gap / 2;
+    const y = sy(v.value);
+    const h = H - pad.b - y;
+    bars += `<rect x="${x}" y="${y}" width="${bw}" height="${h}" fill="${v.color || '#ff3c3c'}" rx="2"/>`;
+    bars += `<text x="${x + bw/2}" y="${y - 4}" text-anchor="middle" fill="#e6ebf2" font-size="11" font-family="JetBrains Mono">${opts.valueFormat ? opts.valueFormat(v.value) : v.value.toFixed(2)}</text>`;
+    labels += `<text x="${x + bw/2}" y="${H - pad.b + 16}" text-anchor="middle" fill="#8a95a8" font-size="10">${escapeHtml(v.label)}</text>`;
+  });
+  // Y axis
+  let grid = '';
+  for (let i = 0; i <= 4; i++) {
+    const v = min + (max - min) * i / 4;
+    const y = sy(v);
+    grid += `<line x1="${pad.l}" y1="${y}" x2="${W - pad.r}" y2="${y}" stroke="#232c3d" stroke-width="0.5"/>`;
+    grid += `<text x="${pad.l - 6}" y="${y + 3}" text-anchor="end" fill="#5d6678" font-size="10" font-family="JetBrains Mono">${opts.yFormat ? opts.yFormat(v) : v.toFixed(1)}</text>`;
+  }
+  return chartFrame(W, H, pad, grid + bars + labels);
+}
+
+function heatmapGrid(rows, opts = {}) {
+  const W = opts.width || 600;
+  const cellW = opts.cellW || 32, cellH = opts.cellH || 24;
+  const labelW = opts.labelW || 120;
+  const cols = Math.max(...rows.map(r => r.cells.length));
+  const H = rows.length * cellH + 40;
+  const max = opts.max ?? Math.max(...rows.flatMap(r => r.cells.map(c => c.value).filter(v => v != null)));
+  const min = opts.min ?? 0;
+  const colorFor = (v) => {
+    if (v == null) return '#11161f';
+    const t = (v - min) / ((max - min) || 1);
+    const r = Math.round(255 * t), g = Math.round(60 + 100 * (1 - t)), b = Math.round(60 + 100 * (1 - t));
+    return `rgb(${r},${g},${b})`;
+  };
+  let body = '';
+  // Column headers
+  for (let c = 0; c < cols; c++) {
+    body += `<text x="${labelW + c * cellW + cellW / 2}" y="14" text-anchor="middle" fill="#8a95a8" font-size="10" font-family="JetBrains Mono">${(opts.colLabel ? opts.colLabel(c) : c + 1)}</text>`;
+  }
+  rows.forEach((row, ri) => {
+    const y = 24 + ri * cellH;
+    body += `<text x="${labelW - 8}" y="${y + cellH / 2 + 3}" text-anchor="end" fill="#e6ebf2" font-size="11">${escapeHtml(row.label)}</text>`;
+    row.cells.forEach((cell, ci) => {
+      const x = labelW + ci * cellW;
+      const fill = cell.value == null ? '#0a0e14' : colorFor(cell.value);
+      body += `<rect x="${x}" y="${y}" width="${cellW - 2}" height="${cellH - 2}" fill="${fill}" rx="2" stroke="#11161f"/>`;
+      if (cell.value != null) {
+        body += `<text x="${x + cellW / 2}" y="${y + cellH / 2 + 3}" text-anchor="middle" fill="white" font-size="9" font-family="JetBrains Mono">${opts.cellFormat ? opts.cellFormat(cell.value) : cell.value.toFixed(0)}</text>`;
+      }
     });
   });
-  document.getElementById('searchInput').addEventListener('input', (e) => {
-    state.search = e.target.value.trim().toLowerCase();
-    render();
-  });
-  const toggle = document.getElementById('toggleView');
-  toggle.addEventListener('click', () => {
-    state.showPast = !state.showPast;
-    toggle.setAttribute('aria-pressed', String(state.showPast));
-    toggle.querySelector('.view-on').textContent =
-      state.showPast ? 'Masquer passées' : 'Afficher passées';
-    render();
-  });
+  return `<svg class="chart-svg" viewBox="0 0 ${labelW + cols * cellW + 16} ${H}">${body}</svg>`;
 }
 
-function render() {
+/* ============================================================
+   CALENDAR VIEW (existing, refactored)
+   ============================================================ */
+function renderCalendar() {
   const now = new Date();
-  const filtered = state.events.filter(matchesFilters);
+  const filtered = State.events.filter(matchesCalendarFilters);
   const live = filtered.filter(e => isLive(e, now));
   const upcoming = filtered.filter(e => e.start > now);
   renderLiveBanner(live[0]);
   renderFeatured(live[0] || upcoming[0]);
-  renderList(filtered, now);
+  renderEventList(filtered, now);
 }
-
-function matchesFilters(e) {
-  if (state.filter !== 'all' && e.category !== state.filter) return false;
-  if (state.search) {
+function matchesCalendarFilters(e) {
+  if (State.filter !== 'all' && e.category !== State.filter) return false;
+  if (State.search) {
     const haystack = [e.name, e.series, e.track, e.country].join(' ').toLowerCase();
-    if (!haystack.includes(state.search)) return false;
+    if (!haystack.includes(State.search)) return false;
   }
   return true;
 }
-
 function isLive(e, now) { return e.start <= now && now <= e.end; }
-
 function renderLiveBanner(liveEvent) {
   const banner = document.getElementById('liveBanner');
   if (!liveEvent) { banner.hidden = true; return; }
@@ -700,7 +1648,6 @@ function renderLiveBanner(liveEvent) {
   link.target = liveEvent.url ? '_blank' : '_self';
   link.rel = 'noopener noreferrer';
 }
-
 function renderFeatured(event) {
   const root = document.getElementById('nextUp');
   if (!event) { root.innerHTML = ''; return; }
@@ -722,103 +1669,1129 @@ function renderFeatured(event) {
         </div>
       </div>
       <div class="countdown">
-        ${countdownUnit(cd.days, 'JOURS')}
-        ${countdownUnit(cd.hours, 'HEURES')}
-        ${countdownUnit(cd.minutes, 'MIN')}
-        ${countdownUnit(cd.seconds, 'SEC')}
+        ${countdownUnit(cd.days, 'JOURS')}${countdownUnit(cd.hours, 'HEURES')}
+        ${countdownUnit(cd.minutes, 'MIN')}${countdownUnit(cd.seconds, 'SEC')}
       </div>
-    </div>
-  `;
+    </div>`;
 }
-
-function countdownUnit(value, label) {
-  return `<div class="countdown-unit"><span class="countdown-value">${String(value).padStart(2,'0')}</span><span class="countdown-label">${label}</span></div>`;
+function countdownUnit(v, l) {
+  return `<div class="countdown-unit"><span class="countdown-value">${String(v).padStart(2,'0')}</span><span class="countdown-label">${l}</span></div>`;
 }
-
 function computeCountdown(ms) {
   if (ms < 0) ms = 0;
   const s = Math.floor(ms / 1000);
-  return {
-    days:    Math.floor(s / 86400),
-    hours:   Math.floor((s % 86400) / 3600),
-    minutes: Math.floor((s % 3600) / 60),
-    seconds: s % 60
-  };
+  return { days: Math.floor(s / 86400), hours: Math.floor((s % 86400) / 3600), minutes: Math.floor((s % 3600) / 60), seconds: s % 60 };
 }
-
-function renderList(events, now) {
+function renderEventList(events, now) {
   const list = document.getElementById('eventsList');
-  const visible = events.filter(e => state.showPast || e.end >= now);
-  if (!visible.length) {
-    list.innerHTML = '<p class="loading">Aucun événement ne correspond.</p>';
-    return;
-  }
+  const visible = events.filter(e => State.showPast || e.end >= now);
+  if (!visible.length) { list.innerHTML = '<p class="loading">Aucun événement ne correspond.</p>'; return; }
   list.innerHTML = visible.map(e => eventCard(e, now)).join('');
 }
-
 function eventCard(e, now) {
   const live = isLive(e, now);
   const past = e.end < now;
   const klass = live ? 'live' : past ? 'past' : '';
-  const status = live
-    ? `EN DIRECT — fin dans ${formatRelative(e.end - now)}`
-    : past
-      ? `Terminé il y a ${formatRelative(now - e.end)}`
-      : `Dans ${formatRelative(e.start - now)}`;
-  return `
-    <article class="event ${klass}">
-      <div class="event-date">
-        <span class="day">${String(e.start.getDate()).padStart(2,'0')}</span>
-        <span class="month">${MONTH_FR[e.start.getMonth()]}</span>
-        <span class="year">${e.start.getFullYear()}</span>
-      </div>
-      <div class="event-body">
-        <h3 class="event-name">${escapeHtml(e.name)}</h3>
-        <div class="event-meta">
-          <span><strong>${escapeHtml(e.series)}</strong></span>
-          <span>${escapeHtml(e.track)} · ${escapeHtml(e.country)}</span>
-          <span>Durée : ${escapeHtml(e.duration)}</span>
-        </div>
-      </div>
-      <div class="event-aside">
-        <span class="badge ${e.category}">${CATEGORY_LABELS[e.category] || e.category}</span>
-        <span class="event-time">${formatTimeRange(e.start, e.end)}</span>
-        <span class="event-status">${status}</span>
-      </div>
-    </article>
-  `;
+  const status = live ? `EN DIRECT — fin dans ${formatRelative(e.end - now)}`
+    : past ? `Terminé il y a ${formatRelative(now - e.end)}`
+    : `Dans ${formatRelative(e.start - now)}`;
+  return `<article class="event ${klass}">
+    <div class="event-date"><span class="day">${String(e.start.getDate()).padStart(2,'0')}</span>
+    <span class="month">${MONTH_FR[e.start.getMonth()]}</span>
+    <span class="year">${e.start.getFullYear()}</span></div>
+    <div class="event-body"><h3 class="event-name">${escapeHtml(e.name)}</h3>
+    <div class="event-meta"><span><strong>${escapeHtml(e.series)}</strong></span>
+    <span>${escapeHtml(e.track)} · ${escapeHtml(e.country)}</span>
+    <span>Durée : ${escapeHtml(e.duration)}</span></div></div>
+    <div class="event-aside"><span class="badge ${e.category}">${CATEGORY_LABELS[e.category] || e.category}</span>
+    <span class="event-time">${formatTimeRange(e.start, e.end)}</span>
+    <span class="event-status">${status}</span></div></article>`;
 }
-
-function formatDateTime(d) {
-  return d.toLocaleString('fr-FR', {
-    weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
-    hour: '2-digit', minute: '2-digit'
-  });
-}
-
 function formatTimeRange(start, end) {
   const sameDay = start.toDateString() === end.toDateString();
   const t = (d) => d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-  return sameDay
-    ? `${t(start)} → ${t(end)}`
-    : `${t(start)} → ${end.toLocaleDateString('fr-FR', { day:'2-digit', month:'short' })} ${t(end)}`;
+  return sameDay ? `${t(start)} → ${t(end)}` : `${t(start)} → ${end.toLocaleDateString('fr-FR', { day:'2-digit', month:'short' })} ${t(end)}`;
 }
 
-function formatRelative(ms) {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) return `${s} s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m} min`;
-  const h = Math.floor(m / 60);
-  if (h < 48) return `${h}h ${m % 60}min`;
-  return `${Math.floor(h / 24)} jours`;
+/* ============================================================
+   GARAGE VIEW (Setups)
+   ============================================================ */
+function renderGarage() {
+  const root = document.getElementById('garageRoot');
+  const setups = Object.values(State.setups).sort((a, b) => b.importedAt - a.importedAt);
+  document.getElementById('badgeSetups').textContent = setups.length;
+
+  if (State.selected.setupId && setups.find(s => s.id === State.selected.setupId)) {
+    if (State.selected.compareSetupId && State.setups[State.selected.compareSetupId]) {
+      root.innerHTML = renderSetupCompare(State.selected.setupId, State.selected.compareSetupId);
+    } else {
+      root.innerHTML = renderSetupDetail(State.selected.setupId);
+    }
+    bindSetupDetailActions();
+    return;
+  }
+
+  if (!setups.length) {
+    root.innerHTML = `
+      <div class="view-header">
+        <div><h2>Garage</h2><p class="subtitle">Bibliothèque de setups (.svm)</p></div>
+      </div>
+      <div class="empty-state">
+        <svg class="empty-state-icon" viewBox="0 0 64 64" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="8" y="20" width="48" height="32" rx="4"/><path d="M20 20V12M44 20V12"/><circle cx="20" cy="40" r="4"/><circle cx="44" cy="40" r="4"/>
+        </svg>
+        <h3>Aucun setup importé</h3>
+        <p>Glissez-déposez vos fichiers <code>.svm</code> depuis<br><code>UserData/&lt;pseudo&gt;/Settings/&lt;voiture&gt;/&lt;circuit&gt;/</code></p>
+        <button class="empty-state-cta" onclick="document.getElementById('fileInput').click()">Importer des setups</button>
+      </div>`;
+    return;
+  }
+
+  // Group by car
+  const byCar = {};
+  for (const s of setups) {
+    const k = s.car || s.vehicleClass || 'Inconnu';
+    (byCar[k] = byCar[k] || []).push(s);
+  }
+  const groups = Object.entries(byCar).map(([car, list]) => `
+    <h3 class="section-title">${escapeHtml(car)} <span style="color:var(--muted-2);font-size:11px;">${list.length}</span></h3>
+    <div class="garage-grid">${list.map(setupCardHTML).join('')}</div>
+  `).join('');
+
+  root.innerHTML = `
+    <div class="view-header">
+      <div><h2>Garage</h2><p class="subtitle">${setups.length} setup(s) · groupés par voiture</p></div>
+      <div class="view-actions">
+        <button class="btn primary" onclick="document.getElementById('fileInput').click()">+ Importer .svm</button>
+      </div>
+    </div>
+    ${groups}`;
+  root.querySelectorAll('[data-setup-id]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      State.selected.setupId = el.dataset.setupId;
+      State.selected.compareSetupId = null;
+      refresh();
+    });
+  });
+  root.querySelectorAll('[data-delete-setup]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = el.dataset.deleteSetup;
+      if (!confirm('Supprimer ce setup ?')) return;
+      delete State.setups[id];
+      Storage.save();
+      refresh();
+    });
+  });
 }
 
-function escapeHtml(s) {
-  if (s == null) return '';
-  return String(s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+function setupCardHTML(s) {
+  const bars = [
+    ['Downforce', s.basic.Downforce],
+    ['Balance', s.basic.Balance],
+    ['Ride', s.basic.Ride],
+    ['Gearing', s.basic.Gearing],
+  ];
+  return `<article class="setup-card" data-setup-id="${s.id}">
+    <div class="setup-card-head">
+      <div>
+        <div class="setup-car">${escapeHtml(s.car || 'Inconnu')}</div>
+        <div class="setup-class">${escapeHtml((s.vehicleClass || '').split(' ')[0] || '')}</div>
+      </div>
+      <button class="btn ghost small danger" data-delete-setup="${s.id}" title="Supprimer">✕</button>
+    </div>
+    <div class="setup-filename">${escapeHtml(s.filename)}</div>
+    <div class="setup-basic-bars">
+      ${bars.map(([l, v]) => `
+        <div class="setup-basic-bar">
+          <span class="label">${l}</span>
+          <span class="bar" style="--w: ${(v * 100).toFixed(0)}%"></span>
+          <span class="val">${v.toFixed(2)}</span>
+        </div>`).join('')}
+    </div>
+  </article>`;
+}
+
+function renderSetupDetail(id) {
+  const s = State.setups[id];
+  if (!s) return `<div class="empty-state"><p>Setup introuvable.</p></div>`;
+  const otherSetups = Object.values(State.setups).filter(x => x.id !== id);
+  return `
+    <div class="view-header">
+      <div>
+        <h2>${escapeHtml(s.car || 'Setup')}</h2>
+        <p class="subtitle">${escapeHtml(s.vehicleClass)} · ${escapeHtml(s.filename)}</p>
+      </div>
+      <div class="view-actions">
+        ${otherSetups.length ? `
+          <select class="btn" id="compareWith">
+            <option value="">Comparer avec…</option>
+            ${otherSetups.map(o => `<option value="${o.id}">${escapeHtml(o.car || o.filename)} (${escapeHtml(o.filename)})</option>`).join('')}
+          </select>` : ''}
+        <button class="btn ghost" data-action="back">← Garage</button>
+      </div>
+    </div>
+    <div class="setup-detail">
+      <div class="setup-detail-side">
+        ${suspensionDiagramHTML(s)}
+        ${cornerCardHTML('Avant gauche', s.sections.FRONTLEFT)}
+        ${cornerCardHTML('Avant droit', s.sections.FRONTRIGHT)}
+        ${cornerCardHTML('Arrière gauche', s.sections.REARLEFT)}
+        ${cornerCardHTML('Arrière droit', s.sections.REARRIGHT)}
+      </div>
+      <div>
+        <div class="section-grid">
+          ${sectionBlockHTML('GENERAL', s.sections.GENERAL)}
+          ${sectionBlockHTML('FRONTWING', s.sections.FRONTWING)}
+          ${sectionBlockHTML('REARWING', s.sections.REARWING)}
+          ${sectionBlockHTML('BODYAERO', s.sections.BODYAERO)}
+          ${sectionBlockHTML('SUSPENSION', s.sections.SUSPENSION, true)}
+          ${sectionBlockHTML('CONTROLS', s.sections.CONTROLS)}
+          ${sectionBlockHTML('ENGINE', s.sections.ENGINE)}
+          ${sectionBlockHTML('DRIVELINE', s.sections.DRIVELINE)}
+        </div>
+      </div>
+    </div>`;
+}
+
+function bindSetupDetailActions() {
+  const sel = document.getElementById('compareWith');
+  if (sel) sel.addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    State.selected.compareSetupId = e.target.value;
+    refresh();
+  });
+  document.querySelectorAll('[data-action="back"]').forEach(b => b.addEventListener('click', () => {
+    State.selected.setupId = null;
+    State.selected.compareSetupId = null;
+    refresh();
+  }));
+  document.querySelectorAll('[data-action="back-detail"]').forEach(b => b.addEventListener('click', () => {
+    State.selected.compareSetupId = null;
+    refresh();
+  }));
+}
+
+function suspensionDiagramHTML(s) {
+  const fl = s.sections.FRONTLEFT || {}, fr = s.sections.FRONTRIGHT || {};
+  const rl = s.sections.REARLEFT || {}, rr = s.sections.REARRIGHT || {};
+  const v = (sec, key) => (sec[key] && sec[key].display) || '—';
+  return `
+    <div class="suspension-diagram">
+      <h4>Vue d'ensemble</h4>
+      <svg class="car-svg" viewBox="0 0 240 380" fill="none">
+        <rect x="60" y="40" width="120" height="300" rx="40" fill="#11161f" stroke="#232c3d" stroke-width="2"/>
+        <rect x="80" y="80" width="80" height="60" rx="6" fill="#1a212e"/>
+        <rect x="80" y="220" width="80" height="80" rx="6" fill="#1a212e"/>
+        <text x="120" y="115" text-anchor="middle" fill="#8a95a8" font-size="12" font-family="JetBrains Mono">FRONT</text>
+        <text x="120" y="265" text-anchor="middle" fill="#8a95a8" font-size="12" font-family="JetBrains Mono">REAR</text>
+        <!-- FL -->
+        <rect x="20" y="60" width="40" height="60" rx="6" fill="#ff3c3c" opacity="0.15" stroke="#ff3c3c"/>
+        <text x="40" y="80" text-anchor="middle" fill="#e6ebf2" font-size="9" font-family="JetBrains Mono">FL</text>
+        <text x="40" y="95" text-anchor="middle" fill="#ff3c3c" font-size="9" font-family="JetBrains Mono">${v(fl,'CamberSetting').replace(' deg','°')}</text>
+        <text x="40" y="108" text-anchor="middle" fill="#ffb84d" font-size="9" font-family="JetBrains Mono">${v(fl,'PressureSetting').replace(' kPa','')}kPa</text>
+        <!-- FR -->
+        <rect x="180" y="60" width="40" height="60" rx="6" fill="#ff3c3c" opacity="0.15" stroke="#ff3c3c"/>
+        <text x="200" y="80" text-anchor="middle" fill="#e6ebf2" font-size="9" font-family="JetBrains Mono">FR</text>
+        <text x="200" y="95" text-anchor="middle" fill="#ff3c3c" font-size="9" font-family="JetBrains Mono">${v(fr,'CamberSetting').replace(' deg','°')}</text>
+        <text x="200" y="108" text-anchor="middle" fill="#ffb84d" font-size="9" font-family="JetBrains Mono">${v(fr,'PressureSetting').replace(' kPa','')}kPa</text>
+        <!-- RL -->
+        <rect x="20" y="260" width="40" height="60" rx="6" fill="#4da3ff" opacity="0.15" stroke="#4da3ff"/>
+        <text x="40" y="280" text-anchor="middle" fill="#e6ebf2" font-size="9" font-family="JetBrains Mono">RL</text>
+        <text x="40" y="295" text-anchor="middle" fill="#4da3ff" font-size="9" font-family="JetBrains Mono">${v(rl,'CamberSetting').replace(' deg','°')}</text>
+        <text x="40" y="308" text-anchor="middle" fill="#ffb84d" font-size="9" font-family="JetBrains Mono">${v(rl,'PressureSetting').replace(' kPa','')}kPa</text>
+        <!-- RR -->
+        <rect x="180" y="260" width="40" height="60" rx="6" fill="#4da3ff" opacity="0.15" stroke="#4da3ff"/>
+        <text x="200" y="280" text-anchor="middle" fill="#e6ebf2" font-size="9" font-family="JetBrains Mono">RR</text>
+        <text x="200" y="295" text-anchor="middle" fill="#4da3ff" font-size="9" font-family="JetBrains Mono">${v(rr,'CamberSetting').replace(' deg','°')}</text>
+        <text x="200" y="308" text-anchor="middle" fill="#ffb84d" font-size="9" font-family="JetBrains Mono">${v(rr,'PressureSetting').replace(' kPa','')}kPa</text>
+        <!-- BASIC bars -->
+        <text x="120" y="160" text-anchor="middle" fill="#8a95a8" font-size="10" letter-spacing="2">DOWNFORCE ${(s.basic.Downforce*100).toFixed(0)}%</text>
+        <line x1="80" y1="170" x2="160" y2="170" stroke="#232c3d" stroke-width="2"/>
+        <line x1="80" y1="170" x2="${80 + s.basic.Downforce * 80}" y2="170" stroke="#ff3c3c" stroke-width="3"/>
+        <text x="120" y="190" text-anchor="middle" fill="#8a95a8" font-size="10" letter-spacing="2">BALANCE ${(s.basic.Balance*100).toFixed(0)}%</text>
+        <line x1="80" y1="200" x2="160" y2="200" stroke="#232c3d" stroke-width="2"/>
+        <line x1="80" y1="200" x2="${80 + s.basic.Balance * 80}" y2="200" stroke="#ffb84d" stroke-width="3"/>
+      </svg>
+    </div>`;
+}
+function cornerCardHTML(label, sec) {
+  if (!sec) return '';
+  const keys = ['CamberSetting','PressureSetting','SpringSetting','RideHeightSetting','BrakeDiscSetting','CompoundSetting'];
+  return `<div class="corner-card"><h5>${label}</h5><div class="corner-grid">
+    ${keys.filter(k => sec[k]).map(k => `<div class="kv"><span class="kv-label">${prettyKey(k)}</span><span class="kv-value">${escapeHtml(sec[k].display || sec[k].raw)}</span></div>`).join('')}
+  </div></div>`;
+}
+function sectionBlockHTML(title, sec, dense) {
+  if (!sec || !Object.keys(sec).length) return '';
+  const entries = Object.entries(sec).filter(([k, v]) => {
+    const d = (v.display || '').toLowerCase();
+    return !(d.includes('n/a') || d.includes('non-adjustable') || d.includes('détaché') || d.includes('detached'));
+  });
+  if (!entries.length) return '';
+  const rows = entries.slice(0, dense ? 12 : 8).map(([k, v]) =>
+    `<div class="kv-row"><span class="k">${escapeHtml(prettyKey(k))}</span><span class="v">${escapeHtml(v.display || v.raw)}</span></div>`
+  ).join('');
+  return `<div class="section-block"><h4>${title}</h4><div class="kv-list">${rows}</div></div>`;
+}
+function prettyKey(k) {
+  return k.replace(/Setting$/, '').replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase()).replace(/\s+/g, ' ').trim();
+}
+
+function renderSetupCompare(idA, idB) {
+  const a = State.setups[idA], b = State.setups[idB];
+  if (!a || !b) return `<div class="empty-state"><p>Setup introuvable.</p></div>`;
+  const allSections = new Set([...Object.keys(a.sections), ...Object.keys(b.sections)]);
+  const blocks = [];
+  for (const sec of allSections) {
+    if (sec === '_HEADER' || sec === 'BASIC') continue;
+    const sa = a.sections[sec] || {}, sb = b.sections[sec] || {};
+    const allKeys = new Set([...Object.keys(sa), ...Object.keys(sb)]);
+    const rows = [];
+    for (const k of allKeys) {
+      const va = sa[k] ? (sa[k].display || sa[k].raw) : '—';
+      const vb = sb[k] ? (sb[k].display || sb[k].raw) : '—';
+      const diff = va !== vb;
+      const isNA = (va.toLowerCase && (va.toLowerCase().includes('n/a') || va.toLowerCase().includes('non-adjust'))) ||
+                   (vb.toLowerCase && (vb.toLowerCase().includes('n/a') || vb.toLowerCase().includes('non-adjust')));
+      if (isNA && !diff) continue;
+      rows.push(`<tr class="${diff ? 'diff' : ''}" style="${diff ? 'background:rgba(255,184,77,0.06);' : ''}">
+        <td style="color:var(--muted);font-size:12px;padding:6px 12px;">${escapeHtml(prettyKey(k))}</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:12px;padding:6px 12px;${diff?'color:var(--accent-2);font-weight:700;':''}">${escapeHtml(va)}</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:12px;padding:6px 12px;${diff?'color:var(--blue);font-weight:700;':''}">${escapeHtml(vb)}</td>
+      </tr>`);
+    }
+    if (rows.length) blocks.push(`<h4 style="margin:24px 0 8px;font-size:11px;letter-spacing:2px;color:var(--accent-2);text-transform:uppercase;">${sec}</h4>
+      <table style="width:100%;border-collapse:collapse;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+        <thead><tr style="background:var(--bg-3);"><th style="text-align:left;padding:8px 12px;font-size:10px;letter-spacing:1.5px;color:var(--muted);">Param</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;letter-spacing:1.5px;color:var(--accent);">A · ${escapeHtml(a.filename)}</th>
+        <th style="text-align:left;padding:8px 12px;font-size:10px;letter-spacing:1.5px;color:var(--blue);">B · ${escapeHtml(b.filename)}</th></tr></thead>
+        <tbody>${rows.join('')}</tbody></table>`);
+  }
+  return `
+    <div class="view-header">
+      <div><h2>Comparateur</h2><p class="subtitle">Différences uniquement entre A et B</p></div>
+      <div class="view-actions"><button class="btn ghost" data-action="back-detail">← Détail A</button><button class="btn ghost" data-action="back">← Garage</button></div>
+    </div>
+    <div class="compare-grid">
+      <div class="compare-col"><h3 style="color:var(--accent);">A · ${escapeHtml(a.car)}</h3><div class="filename">${escapeHtml(a.filename)}</div></div>
+      <div class="compare-col"><h3 style="color:var(--blue);">B · ${escapeHtml(b.car)}</h3><div class="filename">${escapeHtml(b.filename)}</div></div>
+    </div>
+    ${blocks.join('')}`;
+}
+
+/* ============================================================
+   RACE VAULT (Sessions)
+   ============================================================ */
+function renderVault() {
+  const root = document.getElementById('vaultRoot');
+  const sessions = Object.values(State.sessions).sort((a, b) => b.timestamp - a.timestamp);
+  document.getElementById('badgeSessions').textContent = sessions.length;
+
+  if (State.selected.sessionId && State.sessions[State.selected.sessionId]) {
+    root.innerHTML = renderSessionDetail(State.selected.sessionId);
+    bindSessionDetailActions();
+    return;
+  }
+
+  if (!sessions.length) {
+    root.innerHTML = `
+      <div class="view-header">
+        <div><h2>Race Vault</h2><p class="subtitle">Toutes vos sessions parsées</p></div>
+      </div>
+      <div class="empty-state">
+        <svg class="empty-state-icon" viewBox="0 0 64 64" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="8" y="12" width="48" height="40" rx="4"/><path d="M20 24h24M20 32h24M20 40h16"/>
+        </svg>
+        <h3>Aucune session importée</h3>
+        <p>Glissez-déposez vos résultats <code>.xml</code> depuis<br><code>UserData/Log/Results/</code></p>
+        <button class="empty-state-cta" onclick="document.getElementById('fileInput').click()">Importer des XML</button>
+      </div>`;
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="view-header">
+      <div><h2>Race Vault</h2><p class="subtitle">${sessions.length} session(s)</p></div>
+      <div class="view-actions"><button class="btn primary" onclick="document.getElementById('fileInput').click()">+ Importer .xml</button></div>
+    </div>
+    <div class="session-list">${sessions.map(sessionCardHTML).join('')}</div>`;
+  root.querySelectorAll('[data-session-id]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      State.selected.sessionId = el.dataset.sessionId;
+      State.selected.rivalIdxs = [];
+      refresh();
+    });
+  });
+  root.querySelectorAll('[data-delete-session]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = el.dataset.deleteSession;
+      if (!confirm('Supprimer cette session ?')) return;
+      delete State.sessions[id];
+      Storage.save();
+      refresh();
+    });
+  });
+}
+
+function sessionCardHTML(s) {
+  const player = s.drivers.find(d => d.isPlayer);
+  const hasTSR = s.drivers.some(d => TSR_PATTERN.test(d.teamName || ''));
+  const date = new Date(s.timestamp);
+  const playerInfo = player
+    ? `<div><strong>${escapeHtml(player.name)}</strong> · ${escapeHtml(player.carType)} · #${escapeHtml(player.carNumber)}</div>
+       <div style="color:var(--muted);font-size:12px;margin-top:2px;">${escapeHtml(player.teamName)}${player.finishStatus && player.finishStatus !== 'None' ? ` <span class="dq">${escapeHtml(player.finishStatus)}</span>` : ''}</div>`
+    : `<div style="color:var(--muted);">Pas de pilote local</div><div style="color:var(--muted-2);font-size:12px;margin-top:2px;">${s.drivers.length} pilotes IA</div>`;
+  return `<article class="session-card ${player ? 'has-player' : ''}" data-session-id="${s.id}">
+    <div class="event-date" style="border:none;padding:0;">
+      <span class="day">${String(date.getDate()).padStart(2,'0')}</span>
+      <span class="month">${MONTH_FR[date.getMonth()]}</span>
+      <span class="year">${date.getFullYear()}</span>
+    </div>
+    <div>
+      <h3 style="margin:0 0 6px;font-size:18px;">${escapeHtml(s.track)}${hasTSR ? ' <span class="badge endurance" style="margin-left:8px;">TSR</span>' : ''}</h3>
+      <div style="color:var(--muted);font-size:13px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+        <span class="session-meta-pill">${escapeHtml(s.sessionType)}</span>
+        <span>${escapeHtml(s.trackEvent || '')}</span>
+        ${s.fuelMult !== 1 ? `<span class="session-meta-pill">Fuel x${s.fuelMult}</span>` : ''}
+        ${s.tireMult !== 1 ? `<span class="session-meta-pill">Tire x${s.tireMult}</span>` : ''}
+      </div>
+      <div style="margin-top:8px;">${playerInfo}</div>
+    </div>
+    <div class="session-stat">
+      <span class="label">Pilotes</span>
+      <span class="value">${s.drivers.length}</span>
+    </div>
+    ${player && player.bestLapTime ? `<div class="session-stat">
+      <span class="label">Best Lap</span>
+      <span class="value best">${formatLapTime(player.bestLapTime)}</span>
+    </div>` : `<div class="session-stat">
+      <span class="label">Durée</span>
+      <span class="value">${s.raceTime ? Math.round(s.raceTime/60)+'min' : s.raceLaps+'lap'}</span>
+    </div>`}
+    <button class="btn ghost small danger" data-delete-session="${s.id}" title="Supprimer" style="grid-column:-1;align-self:start;">✕</button>
+  </article>`;
+}
+
+function renderSessionDetail(id) {
+  const s = State.sessions[id];
+  if (!s) return `<div class="empty-state"><p>Session introuvable.</p></div>`;
+  const player = s.drivers.find(d => d.isPlayer);
+  const playerIdx = player ? s.drivers.findIndex(d => d.isPlayer) : -1;
+  const tsrDrivers = s.drivers.filter(d => TSR_PATTERN.test(d.teamName || ''));
+  const date = new Date(s.timestamp);
+  // Sort by classPosition then position
+  const sortedByPos = [...s.drivers].sort((a, b) => (a.classPosition || 999) - (b.classPosition || 999) || (a.position || 999) - (b.position || 999));
+  // Group by class
+  const classes = [...new Set(s.drivers.map(d => d.carClass).filter(Boolean))];
+
+  // Best lap by class
+  const bestByClass = {};
+  for (const c of classes) {
+    const drivs = s.drivers.filter(d => d.carClass === c && d.bestLapTime > 0);
+    if (drivs.length) {
+      drivs.sort((a, b) => a.bestLapTime - b.bestLapTime);
+      bestByClass[c] = drivs[0];
+    }
+  }
+
+  // Player stats
+  const playerStats = player ? buildPlayerStats(player, s) : null;
+
+  // Charts
+  const focusDrivers = [];
+  if (player) focusDrivers.push({ driver: player, idx: playerIdx, color: '#ff3c3c', label: player.name });
+  State.selected.rivalIdxs.forEach((idx, i) => {
+    const d = s.drivers[idx];
+    if (d) focusDrivers.push({ driver: d, idx, color: RIVAL_COLORS[i % RIVAL_COLORS.length], label: d.name });
+  });
+
+  const lapsChart = buildLapTimesChart(focusDrivers);
+  const fuelChart = buildFuelChart(focusDrivers);
+  const tireChart = buildTireWearChart(focusDrivers);
+  const sectorsChart = buildSectorsChart(focusDrivers);
+  const positionChart = buildPositionChart(focusDrivers);
+
+  // Incidents
+  const incidents = (s.streamEvents || []).filter(ev => ev.type === 'contact' || ev.type === 'incident');
+  const trackLimits = (s.streamEvents || []).filter(ev => ev.type === 'tracklimits' && ev.warningPoints > 0);
+
+  return `
+    <div class="view-header">
+      <div>
+        <h2>${escapeHtml(s.track)}</h2>
+        <p class="subtitle">${escapeHtml(s.sessionType)} · ${escapeHtml(s.trackEvent || '')} · ${formatDateTime(date)}</p>
+      </div>
+      <div class="view-actions">
+        <button class="btn ghost" data-action="back-vault">← Vault</button>
+      </div>
+    </div>
+
+    <div class="session-summary">
+      ${player ? `
+        <div class="summary-card"><div class="label">Mon meilleur tour</div><div class="value" style="color:var(--accent);">${formatLapTime(player.bestLapTime)}</div><div class="sub">Pos ${player.classPosition}/${classes.length ? s.drivers.filter(d => d.carClass === player.carClass).length : s.drivers.length} ${player.carClass}</div></div>
+        <div class="summary-card"><div class="label">Tours bouclés</div><div class="value">${player.laps}</div><div class="sub">${player.pitstops} pit stop(s)</div></div>
+        ${playerStats ? `
+          <div class="summary-card"><div class="label">Conso fuel/tour</div><div class="value">${playerStats.avgFuelUsed.toFixed(3)}</div><div class="sub">moyenne sur ${playerStats.fuelLapCount} tours</div></div>
+          <div class="summary-card"><div class="label">Top speed</div><div class="value">${playerStats.topSpeed.toFixed(1)}</div><div class="sub">km/h</div></div>
+          <div class="summary-card"><div class="label">Stint moy.</div><div class="value">${formatLapTime(playerStats.avgLapTime)}</div><div class="sub">±${playerStats.stdDev.toFixed(2)}s</div></div>
+          <div class="summary-card"><div class="label">Track Limits</div><div class="value" style="color:var(--accent-2);">${playerStats.trackLimitsTotal.toFixed(2)}</div><div class="sub">points warning</div></div>
+        ` : ''}
+      ` : `
+        <div class="summary-card"><div class="label">Pilotes</div><div class="value">${s.drivers.length}</div></div>
+        <div class="summary-card"><div class="label">Classes</div><div class="value" style="font-size:14px;">${classes.map(c => `<span class="badge ${classifyClass(c)}">${escapeHtml(c)}</span>`).join(' ')}</div></div>
+        <div class="summary-card"><div class="label">Durée</div><div class="value">${s.raceTime ? Math.round(s.raceTime/60)+' min' : s.raceLaps+' tours'}</div></div>
+      `}
+    </div>
+
+    <h3 class="section-title">Classement par classe</h3>
+    <div class="leaderboard"><table>
+      <thead><tr>
+        <th class="pos">#</th><th>Pilote</th><th>Voiture / Équipe</th><th>Classe</th>
+        <th>Best lap</th><th>Tours</th><th>Pit</th><th>Statut</th><th>Fixer rival</th>
+      </tr></thead>
+      <tbody>
+        ${sortedByPos.map(d => leaderboardRowHTML(d, s)).join('')}
+      </tbody>
+    </table></div>
+
+    <div class="charts-grid">
+      ${lapsChart ? `<div class="chart-box"><h4>Pace tour par tour</h4>${lapsChart}<div class="chart-legend">${focusDrivers.map(f => `<span><span class="dot" style="background:${f.color};"></span>${escapeHtml(f.label)}</span>`).join('')}</div></div>` : ''}
+      ${sectorsChart ? `<div class="chart-box"><h4>Meilleurs secteurs</h4>${sectorsChart}<div class="chart-legend"><span style="color:var(--muted-2);">Comparé à la référence de classe</span></div></div>` : ''}
+      ${fuelChart ? `<div class="chart-box"><h4>Carburant restant</h4>${fuelChart}</div>` : ''}
+      ${tireChart ? `<div class="chart-box"><h4>Usure pneus (joueur)</h4>${tireChart}</div>` : ''}
+      ${positionChart ? `<div class="chart-box"><h4>Évolution position</h4>${positionChart}</div>` : ''}
+      ${incidents.length || trackLimits.length ? `<div class="chart-box"><h4>Incidents & Track Limits ${player ? '— ' + escapeHtml(player.name) : ''}</h4>
+        <div class="incident-list">${[...incidents, ...trackLimits]
+          .filter(ev => !player || ev.driver === player.name || (ev.otherDriver && ev.otherDriver === player.name))
+          .sort((a, b) => a.et - b.et)
+          .slice(0, 30)
+          .map(incidentHTML).join('') || '<p class="muted">Aucun incident pour le pilote local.</p>'}</div></div>` : ''}
+    </div>`;
+}
+
+function buildPlayerStats(p, s) {
+  const validLaps = p.lapData.filter(l => l.time > 0 && !l.pit && l.num > 1);
+  const avgLapTime = validLaps.length ? validLaps.reduce((a, l) => a + l.time, 0) / validLaps.length : 0;
+  const stdDev = validLaps.length ? Math.sqrt(validLaps.reduce((a, l) => a + Math.pow(l.time - avgLapTime, 2), 0) / validLaps.length) : 0;
+  const fuelLaps = p.lapData.filter(l => l.fuelUsed > 0);
+  const avgFuelUsed = fuelLaps.length ? fuelLaps.reduce((a, l) => a + l.fuelUsed, 0) / fuelLaps.length : 0;
+  const topSpeed = Math.max(...p.lapData.map(l => l.topspeed || 0));
+  const tlEvents = (s.streamEvents || []).filter(ev => ev.type === 'tracklimits' && ev.driver === p.name);
+  const trackLimitsTotal = tlEvents.reduce((a, ev) => Math.max(a, ev.currentPoints || 0), 0);
+  return {
+    avgLapTime, stdDev, avgFuelUsed, topSpeed, fuelLapCount: fuelLaps.length, trackLimitsTotal,
+  };
+}
+
+function leaderboardRowHTML(d, s) {
+  const isPlayer = d.isPlayer;
+  const isTSR = TSR_PATTERN.test(d.teamName || '');
+  const isRival = State.selected.rivalIdxs.includes(d.idx);
+  const cls = [isPlayer ? 'player' : '', isTSR ? 'tsr' : '', isRival ? 'selected-rival' : ''].filter(Boolean).join(' ');
+  const dq = d.finishStatus && d.finishStatus !== 'None' ? `<span class="dq">${escapeHtml(d.finishStatus)}</span>` : '';
+  return `<tr class="${cls}" data-driver-idx="${d.idx}">
+    <td class="pos">${d.classPosition || d.position || '—'}</td>
+    <td>${escapeHtml(d.name)}${isPlayer ? ' <strong style="color:var(--accent);">·YOU</strong>' : ''}${dq}</td>
+    <td><div>${escapeHtml(d.carType)} <span style="color:var(--muted);">#${escapeHtml(d.carNumber)}</span></div><div style="color:var(--muted);font-size:11px;">${escapeHtml(d.teamName)}</div></td>
+    <td><span class="badge ${classifyClass(d.carClass)}">${escapeHtml(d.carClass)}</span></td>
+    <td class="num best">${formatLapTime(d.bestLapTime)}</td>
+    <td class="num">${d.laps}</td>
+    <td class="num">${d.pitstops}</td>
+    <td>${d.aids ? (d.aids.includes('Player') ? '<span style="color:var(--green);">Player</span>' : '<span style="color:var(--muted);">AI</span>') : '—'}</td>
+    <td>${isPlayer ? '—' : `<button class="btn small ${isRival?'primary':'ghost'}" data-toggle-rival="${d.idx}">${isRival ? '★' : '+'}</button>`}</td>
+  </tr>`;
+}
+
+function incidentHTML(ev) {
+  const cls = ev.type === 'contact' ? 'contact' : ev.type === 'tracklimits' ? 'tracklimits' : '';
+  const text = ev.type === 'contact'
+    ? `${escapeHtml(ev.driver)} ↔ ${escapeHtml(ev.otherDriver)} (force ${ev.force.toFixed(0)})`
+    : ev.type === 'tracklimits'
+      ? `${escapeHtml(ev.driver)} — Lap ${ev.lap} · ${escapeHtml(ev.message)}${ev.warningPoints > 0 ? ` (+${ev.warningPoints})` : ''}`
+      : escapeHtml(ev.text || '');
+  const t = ev.et;
+  const mm = String(Math.floor(t / 60)).padStart(2, '0');
+  const ss = String(Math.floor(t % 60)).padStart(2, '0');
+  return `<div class="incident-item ${cls}"><span class="time">${mm}:${ss}</span><span>${text}</span></div>`;
+}
+
+function buildLapTimesChart(focusDrivers) {
+  if (!focusDrivers.length) return '';
+  const series = focusDrivers.map(f => ({
+    color: f.color,
+    points: f.driver.lapData.filter(l => l.time > 0 && !l.pit).map(l => ({ x: l.num, y: l.time })),
+    dots: true,
+  }));
+  if (!series.some(s => s.points.length)) return '';
+  return lineChart(series, {
+    yFormat: v => formatLapTime(v),
+    xFormat: v => `T${Math.round(v)}`,
+  });
+}
+
+function buildFuelChart(focusDrivers) {
+  if (!focusDrivers.length) return '';
+  const series = focusDrivers.map(f => ({
+    color: f.color,
+    points: f.driver.lapData.filter(l => l.fuel != null && !isNaN(l.fuel) && l.fuel > 0).map(l => ({ x: l.num, y: l.fuel * 100 })),
+  }));
+  if (!series.some(s => s.points.length)) return '';
+  return lineChart(series, {
+    yFormat: v => v.toFixed(0) + '%',
+    xFormat: v => `T${Math.round(v)}`,
+    yMin: 0, yMax: 100,
+  });
+}
+
+function buildTireWearChart(focusDrivers) {
+  const player = focusDrivers[0];
+  if (!player) return '';
+  const laps = player.driver.lapData.filter(l => l.twfl != null && !isNaN(l.twfl));
+  if (!laps.length) return '';
+  const series = [
+    { color: '#ff3c3c', points: laps.map(l => ({ x: l.num, y: l.twfl * 100 })) },
+    { color: '#ffb84d', points: laps.map(l => ({ x: l.num, y: l.twfr * 100 })) },
+    { color: '#4da3ff', points: laps.map(l => ({ x: l.num, y: l.twrl * 100 })) },
+    { color: '#3ddc84', points: laps.map(l => ({ x: l.num, y: l.twrr * 100 })) },
+  ];
+  return lineChart(series, {
+    yFormat: v => v.toFixed(0) + '%',
+    xFormat: v => `T${Math.round(v)}`,
+    yMin: 0, yMax: 100,
+  }) + `<div class="chart-legend">
+    <span><span class="dot" style="background:#ff3c3c;"></span>FL</span>
+    <span><span class="dot" style="background:#ffb84d;"></span>FR</span>
+    <span><span class="dot" style="background:#4da3ff;"></span>RL</span>
+    <span><span class="dot" style="background:#3ddc84;"></span>RR</span>
+  </div>`;
+}
+
+function buildSectorsChart(focusDrivers) {
+  if (!focusDrivers.length) return '';
+  const player = focusDrivers[0].driver;
+  // Best of each sector for player
+  const bestS1 = Math.min(...player.lapData.filter(l => l.s1 > 0).map(l => l.s1));
+  const bestS2 = Math.min(...player.lapData.filter(l => l.s2 > 0).map(l => l.s2));
+  const bestS3 = Math.min(...player.lapData.filter(l => l.s3 > 0).map(l => l.s3));
+  if (!isFinite(bestS1) || !isFinite(bestS2) || !isFinite(bestS3)) return '';
+  const values = [
+    { label: 'S1', value: bestS1, color: '#ff3c3c' },
+    { label: 'S2', value: bestS2, color: '#ffb84d' },
+    { label: 'S3', value: bestS3, color: '#4da3ff' },
+  ];
+  return barChart(values, { yFormat: v => v.toFixed(2) + 's', valueFormat: v => v.toFixed(3) });
+}
+
+function buildPositionChart(focusDrivers) {
+  if (!focusDrivers.length) return '';
+  const series = focusDrivers.map(f => ({
+    color: f.color,
+    points: f.driver.lapData.filter(l => l.p > 0).map(l => ({ x: l.num, y: l.p })),
+  }));
+  if (!series.some(s => s.points.length)) return '';
+  // Find min/max for inversion
+  const allYs = series.flatMap(s => s.points.map(p => p.y));
+  const yMin = Math.min(...allYs), yMax = Math.max(...allYs);
+  return lineChart(series, {
+    yFormat: v => `P${Math.round(v)}`,
+    xFormat: v => `T${Math.round(v)}`,
+    yMin: yMax + 0.5, yMax: Math.max(0.5, yMin - 0.5),  // inverted
+  });
+}
+
+function bindSessionDetailActions() {
+  document.querySelectorAll('[data-action="back-vault"]').forEach(b => b.addEventListener('click', () => {
+    State.selected.sessionId = null;
+    refresh();
+  }));
+  document.querySelectorAll('[data-toggle-rival]').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const idx = parseInt(b.dataset.toggleRival, 10);
+    const list = State.selected.rivalIdxs;
+    const i = list.indexOf(idx);
+    if (i >= 0) list.splice(i, 1);
+    else if (list.length < 5) list.push(idx);
+    else { toast('info', 'Maximum 5 rivaux'); return; }
+    refresh();
+  }));
+}
+
+/* ============================================================
+   TELEMETRY VIEW (cross-session analytics)
+   ============================================================ */
+function renderTelemetry() {
+  const root = document.getElementById('telemetryRoot');
+  const sessions = Object.values(State.sessions);
+  if (!sessions.length) {
+    root.innerHTML = `
+      <div class="view-header">
+        <div><h2>Telemetry</h2><p class="subtitle">Analyses cross-sessions</p></div>
+      </div>
+      <div class="empty-state">
+        <h3>Importez d'abord des sessions</h3>
+        <p>Telemetry agrège vos performances sur l'ensemble du Race Vault.</p>
+        <button class="empty-state-cta" onclick="navigate('vault')">Aller au Vault</button>
+      </div>`;
+    return;
+  }
+
+  // Aggregate: best lap per (track, car) for player
+  const allPlayerLaps = [];
+  const trackBests = {};  // track -> { car -> {time, sessionId} }
+  const trackCount = {};
+  const totalIncidents = { contact: 0, tracklimits: 0 };
+  let totalLapsRun = 0, totalKm = 0;
+  const fuelByTrack = {};
+  const sessionsList = [];
+
+  for (const s of sessions) {
+    const p = s.drivers.find(d => d.isPlayer);
+    if (!p) continue;
+    sessionsList.push({ s, p });
+    trackCount[s.track] = (trackCount[s.track] || 0) + 1;
+    const k = p.carType || 'Unknown';
+    if (!trackBests[s.track]) trackBests[s.track] = {};
+    if (p.bestLapTime > 0) {
+      const cur = trackBests[s.track][k];
+      if (!cur || p.bestLapTime < cur.time) trackBests[s.track][k] = { time: p.bestLapTime, sessionId: s.id, date: s.timestamp };
+    }
+    p.lapData.forEach(l => {
+      if (l.time > 0 && !l.pit) {
+        allPlayerLaps.push({ time: l.time, track: s.track, car: p.carType, sessionId: s.id, date: s.timestamp, lapNum: l.num, fuelUsed: l.fuelUsed });
+        totalLapsRun++;
+        totalKm += (s.trackLength || 0) / 1000;
+      }
+    });
+    const fuelLaps = p.lapData.filter(l => l.fuelUsed > 0);
+    if (fuelLaps.length) {
+      const avg = fuelLaps.reduce((a, l) => a + l.fuelUsed, 0) / fuelLaps.length;
+      (fuelByTrack[s.track] = fuelByTrack[s.track] || []).push({ avg, date: s.timestamp, car: p.carType });
+    }
+    (s.streamEvents || []).forEach(ev => {
+      if (ev.driver === p.name) {
+        if (ev.type === 'contact') totalIncidents.contact++;
+        if (ev.type === 'tracklimits' && ev.warningPoints > 0) totalIncidents.tracklimits++;
+      }
+    });
+  }
+
+  if (!sessionsList.length) {
+    root.innerHTML = `
+      <div class="view-header">
+        <div><h2>Telemetry</h2><p class="subtitle">Analyses cross-sessions</p></div>
+      </div>
+      <div class="empty-state"><h3>Aucune session avec pilote local</h3><p>Importez vos propres résultats pour activer cette vue.</p></div>`;
+    return;
+  }
+
+  // Pace evolution over time (player best laps by date)
+  const paceSeries = sessionsList
+    .filter(({ p }) => p.bestLapTime > 0)
+    .sort((a, b) => a.s.timestamp - b.s.timestamp)
+    .map(({ s, p }) => ({ x: s.timestamp / 86400000, y: p.bestLapTime, track: s.track, car: p.carType }));
+
+  // Best laps table
+  const bestRows = [];
+  for (const [track, byCar] of Object.entries(trackBests)) {
+    for (const [car, info] of Object.entries(byCar)) {
+      bestRows.push({ track, car, time: info.time, sessionId: info.sessionId, date: info.date });
+    }
+  }
+  bestRows.sort((a, b) => a.track.localeCompare(b.track) || a.time - b.time);
+
+  root.innerHTML = `
+    <div class="view-header">
+      <div><h2>Telemetry</h2><p class="subtitle">${sessionsList.length} session(s) · ${totalLapsRun} tours · ${totalKm.toFixed(0)} km</p></div>
+    </div>
+
+    <div class="session-summary">
+      <div class="summary-card"><div class="label">Sessions</div><div class="value">${sessionsList.length}</div><div class="sub">${Object.keys(trackCount).length} circuits</div></div>
+      <div class="summary-card"><div class="label">Tours bouclés</div><div class="value">${totalLapsRun}</div><div class="sub">~${totalKm.toFixed(0)} km</div></div>
+      <div class="summary-card"><div class="label">Best laps enregistrés</div><div class="value">${bestRows.length}</div><div class="sub">par voiture × circuit</div></div>
+      <div class="summary-card"><div class="label">Contacts</div><div class="value" style="color:var(--accent);">${totalIncidents.contact}</div><div class="sub">incidents</div></div>
+      <div class="summary-card"><div class="label">Track Limits</div><div class="value" style="color:var(--accent-2);">${totalIncidents.tracklimits}</div><div class="sub">warnings ≥ 1 pt</div></div>
+    </div>
+
+    <div class="charts-grid">
+      <div class="chart-box"><h4>Évolution de la pace (best lap par session)</h4>
+        ${paceSeries.length > 1 ? lineChart([{ color: '#ff3c3c', points: paceSeries, dots: true }], {
+          yFormat: v => formatLapTime(v),
+          xFormat: v => shortDate(new Date(v * 86400000)),
+        }) : '<p class="muted">Plus d\'une session nécessaire.</p>'}
+      </div>
+      <div class="chart-box"><h4>Top circuits</h4>
+        ${barChart(Object.entries(trackCount).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([t, c]) => ({ label: t.split(' ').slice(0,2).join(' '), value: c, color: '#ffb84d' })), { yFormat: v => v.toFixed(0), valueFormat: v => v.toFixed(0) })}
+      </div>
+    </div>
+
+    <h3 class="section-title">Personal Bests</h3>
+    <div class="leaderboard"><table>
+      <thead><tr>
+        <th>Circuit</th><th>Voiture</th><th>Best Lap</th><th>Date</th><th></th>
+      </tr></thead>
+      <tbody>
+        ${bestRows.map(r => `<tr data-pb-session="${r.sessionId}">
+          <td>${escapeHtml(r.track)}</td>
+          <td>${escapeHtml(r.car)}</td>
+          <td class="num best">${formatLapTime(r.time)}</td>
+          <td class="num">${shortDate(new Date(r.date))}</td>
+          <td><button class="btn small ghost" data-pb-session="${r.sessionId}">Ouvrir →</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table></div>`;
+
+  root.querySelectorAll('[data-pb-session]').forEach(el => {
+    el.addEventListener('click', () => {
+      State.selected.sessionId = el.dataset.pbSession;
+      State.selected.rivalIdxs = [];
+      navigate('vault');
+    });
+  });
+}
+
+/* ============================================================
+   TEAM TSR VIEW
+   ============================================================ */
+function renderTeam() {
+  const root = document.getElementById('teamRoot');
+  const sessions = Object.values(State.sessions);
+  // Find all TSR drivers across sessions
+  const tsrAggregate = {};  // name -> { sessions, bestByTrack, totalLaps, totalContacts, lastCar, lastTeam }
+  for (const s of sessions) {
+    for (const d of s.drivers) {
+      if (!TSR_PATTERN.test(d.teamName || '')) continue;
+      const k = d.name;
+      if (!tsrAggregate[k]) tsrAggregate[k] = {
+        name: d.name, lastCar: d.carType, lastTeam: d.teamName, lastClass: d.carClass,
+        sessionsList: [], bestByTrack: {}, totalLaps: 0, totalPits: 0, contactsAsActor: 0, contactsAsVictim: 0,
+        trackLimitsTotal: 0,
+        isPlayer: d.isPlayer,
+      };
+      const info = tsrAggregate[k];
+      info.lastCar = d.carType; info.lastTeam = d.teamName; info.lastClass = d.carClass;
+      info.sessionsList.push({ sessionId: s.id, date: s.timestamp, track: s.track, bestLap: d.bestLapTime, finishStatus: d.finishStatus });
+      info.totalLaps += d.laps || 0;
+      info.totalPits += d.pitstops || 0;
+      if (d.bestLapTime > 0) {
+        const cur = info.bestByTrack[s.track];
+        if (!cur || d.bestLapTime < cur.time) info.bestByTrack[s.track] = { time: d.bestLapTime, car: d.carType, date: s.timestamp };
+      }
+      (s.streamEvents || []).forEach(ev => {
+        if (ev.type === 'contact') {
+          if (ev.driver === d.name) info.contactsAsActor++;
+          if (ev.otherDriver === d.name) info.contactsAsVictim++;
+        }
+        if (ev.type === 'tracklimits' && ev.driver === d.name && ev.warningPoints > 0) info.trackLimitsTotal++;
+      });
+    }
+  }
+  const drivers = Object.values(tsrAggregate).sort((a, b) => (b.isPlayer ? 1 : 0) - (a.isPlayer ? 1 : 0) || b.totalLaps - a.totalLaps);
+
+  if (!drivers.length) {
+    root.innerHTML = `
+      <div class="view-header">
+        <div><h2>Team TSR</h2><p class="subtitle">Pilotes Team Spirit Racing détectés dans vos sessions</p></div>
+      </div>
+      <div class="empty-state">
+        <h3>Aucun pilote TSR détecté</h3>
+        <p>Importez des sessions où des coéquipiers TSR ont couru<br>(détection automatique sur le nom d'équipe).</p>
+        <button class="empty-state-cta" onclick="navigate('vault')">Aller au Vault</button>
+      </div>`;
+    return;
+  }
+
+  // Aggregate stats
+  const totalSessionsCount = drivers.reduce((a, d) => a + d.sessionsList.length, 0);
+  const totalTeamLaps = drivers.reduce((a, d) => a + d.totalLaps, 0);
+
+  root.innerHTML = `
+    <div class="view-header">
+      <div><h2>Team TSR</h2><p class="subtitle">${drivers.length} pilote(s) · ${totalSessionsCount} engagement(s) · ${totalTeamLaps} tours cumulés</p></div>
+    </div>
+    <div class="team-grid">
+      ${drivers.map(d => `<article class="team-card">
+        <h3>${escapeHtml(d.name)} ${d.isPlayer ? '<span style="color:var(--accent);font-size:11px;letter-spacing:1.5px;">YOU</span>' : ''}</h3>
+        <div class="car">${escapeHtml(d.lastCar || '')} · ${escapeHtml(d.lastClass || '')}</div>
+        <div class="car" style="font-size:11px;color:var(--muted-2);margin-top:2px;">${escapeHtml(d.lastTeam || '')}</div>
+        <div class="team-stats">
+          <div class="stat"><div class="stat-label">Sessions</div><div class="stat-value">${d.sessionsList.length}</div></div>
+          <div class="stat"><div class="stat-label">Tours</div><div class="stat-value">${d.totalLaps}</div></div>
+          <div class="stat"><div class="stat-label">Contacts</div><div class="stat-value" style="color:var(--accent);">${d.contactsAsActor}/${d.contactsAsVictim}</div></div>
+          <div class="stat"><div class="stat-label">Track Lim.</div><div class="stat-value" style="color:var(--accent-2);">${d.trackLimitsTotal}</div></div>
+        </div>
+        ${Object.keys(d.bestByTrack).length ? `<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;">
+          <div style="color:var(--muted);font-size:10px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;">Meilleurs tours</div>
+          ${Object.entries(d.bestByTrack).slice(0, 3).map(([t, info]) => `
+            <div style="display:flex;justify-content:space-between;gap:8px;font-family:'JetBrains Mono',monospace;">
+              <span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.split(' ').slice(0,3).join(' '))}</span>
+              <span style="color:var(--accent);font-weight:700;">${formatLapTime(info.time)}</span>
+            </div>`).join('')}
+        </div>` : ''}
+      </article>`).join('')}
+    </div>`;
+}
+
+/* ============================================================
+   LIVE BRIDGE VIEW
+   ============================================================ */
+const LIVE_BRIDGE_PY = `#!/usr/bin/env python3
+'''
+TSR Live Bridge — Shared Memory -> WebSocket relay for Le Mans Ultimate.
+
+Reads the rFactor 2 / LMU shared memory (TheIronWolf plugin v3.7+) and
+broadcasts a compact JSON snapshot ~30 Hz to any browser/tablet connected.
+Compatible with the official rF2SMMP ($rFactor2SMMP_Telemetry$) and
+the Racelab variant ($lmuSMMP_Telemetry$).
+
+Requires:
+    pip install pywin32 websockets
+
+Usage on Windows:
+    python tsr_live_bridge.py
+    -> open the browser at TSR Command Center > Live tab
+    -> the connection establishes automatically.
+'''
+import asyncio, json, mmap, struct, time, websockets
+
+SCORING_NAME    = r"$rFactor2SMMP_Scoring$"
+TELEMETRY_NAME  = r"$rFactor2SMMP_Telemetry$"
+PORT            = 8765
+
+def read_telemetry():
+    try:
+        mm = mmap.mmap(-1, 65536, TELEMETRY_NAME)
+        # Header: version + tick (very simplified parse — full layout is in
+        # https://github.com/TheIronWolfModding/rFactor2SharedMemoryMapPlugin)
+        # For demo we extract speed (m/s), rpm, gear from known offsets.
+        # Adapt offsets to your plugin version.
+        speed = struct.unpack_from("<f", mm, 0x100)[0]
+        rpm   = struct.unpack_from("<f", mm, 0x110)[0]
+        gear  = struct.unpack_from("<i", mm, 0x118)[0]
+        fuel  = struct.unpack_from("<f", mm, 0x120)[0]
+        mm.close()
+        return {"speed_kmh": speed * 3.6, "rpm": rpm, "gear": gear, "fuel_l": fuel}
+    except Exception as e:
+        return {"error": str(e)}
+
+CLIENTS = set()
+
+async def handler(ws):
+    CLIENTS.add(ws)
+    try:
+        async for _ in ws: pass
+    finally:
+        CLIENTS.discard(ws)
+
+async def broadcast():
+    while True:
+        if CLIENTS:
+            data = read_telemetry()
+            data["ts"] = time.time()
+            payload = json.dumps(data)
+            await asyncio.gather(*[c.send(payload) for c in CLIENTS], return_exceptions=True)
+        await asyncio.sleep(1/30)
+
+async def main():
+    print(f"TSR Live Bridge ws://localhost:{PORT}")
+    async with websockets.serve(handler, "localhost", PORT):
+        await broadcast()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+`;
+
+function renderLive() {
+  const root = document.getElementById('liveRoot');
+  const tab = State.selected.liveTab || 'instructions';
+  const connected = State.liveSocket && State.liveSocket.readyState === 1;
+  const data = State.liveData || {};
+
+  root.innerHTML = `
+    <div class="view-header">
+      <div><h2>Live Bridge</h2><p class="subtitle">Lecture temps réel via Shared Memory plugin</p></div>
+      <div class="view-actions">
+        ${connected
+          ? `<button class="btn danger" id="liveDisconnect">Déconnecter</button>`
+          : `<button class="btn primary" id="liveConnect">Connecter ws://localhost:8765</button>`}
+      </div>
+    </div>
+
+    <div class="live-status ${connected ? 'connected' : ''}">
+      <span class="live-status-dot"></span>
+      <div class="live-status-text">
+        <strong>${connected ? 'Connecté' : 'Hors ligne'}</strong>
+        <span class="muted">${connected ? `Dernière mise à jour : ${data.ts ? new Date(data.ts*1000).toLocaleTimeString('fr-FR') : '—'}` : 'Lancez le bridge Python pour recevoir la télémétrie en direct.'}</span>
+      </div>
+      <code style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);">ws://localhost:8765</code>
+    </div>
+
+    <div class="live-hud">
+      <div class="hud-tile"><div class="label">Speed</div><div class="value">${data.speed_kmh != null ? data.speed_kmh.toFixed(0) : '—'}</div><div class="sub">km/h</div></div>
+      <div class="hud-tile"><div class="label">RPM</div><div class="value">${data.rpm != null ? Math.round(data.rpm) : '—'}</div><div class="sub">tr/min</div></div>
+      <div class="hud-tile"><div class="label">Gear</div><div class="value">${data.gear != null ? (data.gear > 0 ? data.gear : data.gear === 0 ? 'N' : 'R') : '—'}</div><div class="sub">rapport</div></div>
+      <div class="hud-tile"><div class="label">Fuel</div><div class="value">${data.fuel_l != null ? data.fuel_l.toFixed(1) : '—'}</div><div class="sub">litres</div></div>
+    </div>
+
+    <div class="tabs-inline">
+      <button class="tab-inline ${tab === 'instructions' ? 'active' : ''}" data-live-tab="instructions">Instructions</button>
+      <button class="tab-inline ${tab === 'bridge' ? 'active' : ''}" data-live-tab="bridge">Bridge Python</button>
+      <button class="tab-inline ${tab === 'plugins' ? 'active' : ''}" data-live-tab="plugins">Plugins détectés</button>
+    </div>
+
+    ${tab === 'instructions' ? `
+      <div class="chart-box">
+        <h4>Mise en route</h4>
+        <ol style="line-height:1.8;color:var(--text);font-size:14px;">
+          <li>Vérifier que <code>rFactor2SharedMemoryMapPlugin64.dll</code> est dans <code>LMU/Plugins/</code> (✓ déjà chez vous).</li>
+          <li>Activer le plugin dans <code>UserData/player/CustomPluginVariables.JSON</code> :
+            <div class="code-block">{ "rFactor2SharedMemoryMapPlugin.dll": { " Enabled":1 } }</div>
+          </li>
+          <li>Sur la même machine, télécharger le bridge Python (onglet "Bridge Python") et lancer :
+            <div class="code-block">python tsr_live_bridge.py</div>
+          </li>
+          <li>Cliquer "Connecter ws://localhost:8765" en haut à droite.</li>
+          <li>Lancer une session dans LMU. Les tuiles HUD s'animent en temps réel.</li>
+        </ol>
+        <p class="muted" style="margin-top:16px;">Le bridge fonctionne aussi via réseau local (ouvrir le port 8765) pour afficher le HUD sur tablette/téléphone en second écran.</p>
+      </div>
+    ` : tab === 'bridge' ? `
+      <div class="chart-box">
+        <h4>tsr_live_bridge.py</h4>
+        <p class="muted" style="margin-bottom:12px;">~50 lignes. Lit la shared memory ~30Hz et la diffuse à tout client WebSocket connecté.</p>
+        <button class="btn primary" id="downloadBridge" style="margin-bottom:12px;">⬇ Télécharger le script</button>
+        <pre class="code-block" style="white-space:pre;">${escapeHtml(LIVE_BRIDGE_PY)}</pre>
+      </div>
+    ` : `
+      <div class="chart-box">
+        <h4>Plugins shared-memory détectés</h4>
+        <table style="width:100%;font-size:13px;border-collapse:collapse;">
+          <thead><tr style="border-bottom:1px solid var(--border);">
+            <th style="text-align:left;padding:10px;color:var(--muted);font-size:10px;letter-spacing:1.5px;">Plugin</th>
+            <th style="text-align:left;padding:10px;color:var(--muted);font-size:10px;letter-spacing:1.5px;">Source mémoire</th>
+            <th style="text-align:left;padding:10px;color:var(--muted);font-size:10px;letter-spacing:1.5px;">Rôle</th>
+          </tr></thead>
+          <tbody>
+            <tr style="border-bottom:1px solid var(--border);"><td style="padding:10px;"><strong>rFactor2SharedMemoryMapPlugin64</strong> v3.7</td><td style="padding:10px;font-family:'JetBrains Mono',monospace;">$rFactor2SMMP_*$</td><td style="padding:10px;color:var(--muted);">Plugin open-source TheIronWolf — base de la plupart des outils tiers.</td></tr>
+            <tr style="border-bottom:1px solid var(--border);"><td style="padding:10px;"><strong>RacelabLMUPlugin</strong></td><td style="padding:10px;font-family:'JetBrains Mono',monospace;">$lmuSMMP_*$</td><td style="padding:10px;color:var(--muted);">Variante rebrandée pour Racelab (LMU spécifique).</td></tr>
+            <tr style="border-bottom:1px solid var(--border);"><td style="padding:10px;"><strong>RaceHub_rF2_SMM_x64</strong> v7</td><td style="padding:10px;font-family:'JetBrains Mono',monospace;">Local\\RaceHub_SMF_*</td><td style="padding:10px;color:var(--muted);">Source de l'app RaceHub pour live timing.</td></tr>
+            <tr style="border-bottom:1px solid var(--border);"><td style="padding:10px;"><strong>PodiumrFactor2Plugin64</strong></td><td style="padding:10px;font-family:'JetBrains Mono',monospace;">Bus Fanatec</td><td style="padding:10px;color:var(--muted);">Fanalab → DD wheelbase (FFB, dashboard volant).</td></tr>
+            <tr><td style="padding:10px;"><strong>DAMPlugin</strong></td><td style="padding:10px;font-family:'JetBrains Mono',monospace;">.ld + .ldx (MoTeC)</td><td style="padding:10px;color:var(--muted);">Export post-session vers MoTeC i2 pour analyse haute fréquence (volant, pédales, freinage par 100Hz).</td></tr>
+          </tbody>
+        </table>
+        <p class="muted" style="margin-top:16px;font-size:13px;">→ Le bridge ci-contre cible le plugin TheIronWolf (le plus stable). On peut adapter pour Racelab en changeant <code>$rFactor2SMMP_</code> en <code>$lmuSMMP_</code>.</p>
+      </div>
+    `}
+  `;
+
+  document.querySelectorAll('[data-live-tab]').forEach(b => b.addEventListener('click', () => {
+    State.selected.liveTab = b.dataset.liveTab;
+    refresh();
+  }));
+  const connectBtn = document.getElementById('liveConnect');
+  if (connectBtn) connectBtn.addEventListener('click', liveConnect);
+  const disconnectBtn = document.getElementById('liveDisconnect');
+  if (disconnectBtn) disconnectBtn.addEventListener('click', liveDisconnect);
+  const dl = document.getElementById('downloadBridge');
+  if (dl) dl.addEventListener('click', () => {
+    const blob = new Blob([LIVE_BRIDGE_PY], { type: 'text/x-python' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'tsr_live_bridge.py'; a.click();
+    URL.revokeObjectURL(url);
+  });
+}
+
+function liveConnect() {
+  try {
+    const ws = new WebSocket('ws://localhost:8765');
+    State.liveSocket = ws;
+    ws.onopen = () => { toast('success', 'Live Bridge connecté'); refresh(); };
+    ws.onclose = () => { toast('info', 'Live Bridge fermé'); State.liveSocket = null; State.liveData = null; refresh(); };
+    ws.onerror = () => { toast('error', 'Connexion impossible', 'Le bridge Python est-il lancé ?'); };
+    ws.onmessage = (e) => {
+      try { State.liveData = JSON.parse(e.data); if (State.view === 'live') renderLive(); } catch (_) {}
+    };
+  } catch (e) { toast('error', 'Erreur WebSocket', e.message); }
+}
+function liveDisconnect() {
+  if (State.liveSocket) State.liveSocket.close();
+}
+
+/* ============================================================
+   ROUTING DISPATCH
+   ============================================================ */
+function refresh() {
+  document.getElementById('badgeSetups').textContent = Object.keys(State.setups).length;
+  document.getElementById('badgeSessions').textContent = Object.keys(State.sessions).length;
+  if (State.view === 'calendar') renderCalendar();
+  else if (State.view === 'garage') renderGarage();
+  else if (State.view === 'vault') renderVault();
+  else if (State.view === 'telemetry') renderTelemetry();
+  else if (State.view === 'team') renderTeam();
+  else if (State.view === 'live') renderLive();
+}
+
+/* ============================================================
+   CLOCK
+   ============================================================ */
+function startClock() {
+  const timeEl = document.getElementById('clockTime');
+  const tzEl = document.getElementById('clockTz');
+  tzEl.textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const tick = () => { timeEl.textContent = new Date().toLocaleTimeString('fr-FR', { hour12: false }); };
+  tick();
+  setInterval(tick, 1000);
+}
+
+/* ============================================================
+   CONTROLS BINDING (calendar)
+   ============================================================ */
+function bindCalendarControls() {
+  document.querySelectorAll('.filter').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.filter').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      State.filter = btn.dataset.filter;
+      if (State.view === 'calendar') renderCalendar();
+    });
+  });
+  const search = document.getElementById('searchInput');
+  if (search) search.addEventListener('input', (e) => {
+    State.search = e.target.value.trim().toLowerCase();
+    if (State.view === 'calendar') renderCalendar();
+  });
+  const toggle = document.getElementById('toggleView');
+  if (toggle) toggle.addEventListener('click', () => {
+    State.showPast = !State.showPast;
+    toggle.setAttribute('aria-pressed', String(State.showPast));
+    toggle.querySelector('.view-on').textContent = State.showPast ? 'Masquer passées' : 'Afficher passées';
+    if (State.view === 'calendar') renderCalendar();
+  });
+}
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+function boot() {
+  startClock();
+  try {
+    const data = JSON.parse(document.getElementById('eventsData').textContent);
+    State.events = (data.events || []).map(e => ({ ...e, start: new Date(e.start), end: new Date(e.end) })).sort((a,b) => a.start - b.start);
+  } catch (err) {
+    console.error('Failed to parse events data', err);
+  }
+  Storage.load();
+  setupNav();
+  setupDropzone();
+  bindCalendarControls();
+  document.getElementById('exportBtn').addEventListener('click', () => Storage.exportJSON());
+  document.getElementById('resetBtn').addEventListener('click', () => Storage.reset());
+  navigate('calendar');
+  setInterval(() => { if (State.view === 'calendar') renderCalendar(); }, 1000);
 }
 
 boot();
