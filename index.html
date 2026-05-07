@@ -714,7 +714,7 @@ button { font-family: inherit; }
   <div class="container footer-inner">
     <p>Sources : FIA WEC officiel + événements LMU communautaires + données utilisateur (XML / SVM / Shared Memory).</p>
     <p class="muted">
-      Généré le <span id="lastUpdated">07/05/2026 18:15 UTC</span>
+      Généré le <span id="lastUpdated">07/05/2026 18:51 UTC</span>
       · <button class="link-btn" id="exportBtn">Export JSON</button>
       · <button class="link-btn" id="resetBtn">Reset</button>
       · TSR Command Center · Non-affilié Motorsport Games / Studio 397.
@@ -723,7 +723,7 @@ button { font-family: inherit; }
 </footer>
 
 <script type="application/json" id="eventsData">{
-  "generated": "2026-05-07T18:15:32.130676Z",
+  "generated": "2026-05-07T18:51:02.129879Z",
   "events": [
     {
       "id": "wec-qatar-2026",
@@ -2496,70 +2496,51 @@ function renderTeam() {
 /* ============================================================
    LIVE BRIDGE VIEW
    ============================================================ */
-const LIVE_BRIDGE_PY = `#!/usr/bin/env python3
-'''
-TSR Live Bridge — Shared Memory -> WebSocket relay for Le Mans Ultimate.
+const LIVE_BRIDGE_PY = `# Aperçu — extrait du fichier complet (~200 lignes) sur GitHub.
+import asyncio, ctypes, json, mmap, struct, time, websockets
+from ctypes import c_double, c_long, c_char, Structure
 
-Reads the rFactor 2 / LMU shared memory (TheIronWolf plugin v3.7+) and
-broadcasts a compact JSON snapshot ~30 Hz to any browser/tablet connected.
-Compatible with the official rF2SMMP ($rFactor2SMMP_Telemetry$) and
-the Racelab variant ($lmuSMMP_Telemetry$).
+TELEMETRY_NAME = r"$rFactor2SMMP_Telemetry$"  # ou $lmuSMMP_Telemetry$ pour Racelab
 
-Requires:
-    pip install pywin32 websockets
+class rF2Vec3(Structure):
+    _pack_ = 4
+    _fields_ = [("x", c_double), ("y", c_double), ("z", c_double)]
 
-Usage on Windows:
-    python tsr_live_bridge.py
-    -> open the browser at TSR Command Center > Live tab
-    -> the connection establishes automatically.
-'''
-import asyncio, json, mmap, struct, time, websockets
+class rF2VehicleTelemetryHead(Structure):
+    # Subset de la struct C++ rF2VehicleTelemetry (plugin v3.7+).
+    # ctypes calcule les offsets exacts de chaque champ declare.
+    _pack_ = 4
+    _fields_ = [
+        ("mID", c_long), ("mDeltaTime", c_double), ("mElapsedTime", c_double),
+        ("mLapNumber", c_long), ("mLapStartET", c_double),
+        ("mVehicleName", c_char * 64), ("mTrackName", c_char * 64),
+        ("mPos", rF2Vec3), ("mLocalVel", rF2Vec3), ("mLocalAccel", rF2Vec3),
+        ("mOri", rF2Vec3 * 3), ("mLocalRot", rF2Vec3), ("mLocalRotAccel", rF2Vec3),
+        ("mGear", c_long), ("mEngineRPM", c_double), ("mEngineWaterTemp", c_double),
+        ("mEngineOilTemp", c_double), ("mClutchRPM", c_double),
+        ("mUnfilteredThrottle", c_double), ("mUnfilteredBrake", c_double),
+        ("mUnfilteredSteering", c_double), ("mUnfilteredClutch", c_double),
+        ("mFilteredThrottle", c_double), ("mFilteredBrake", c_double),
+        ("mFilteredSteering", c_double), ("mFilteredClutch", c_double),
+        ("mSteeringShaftTorque", c_double),
+        # ... + ride heights, downforce, mFuel, mEngineMaxRPM
+    ]
 
-SCORING_NAME    = r"$rFactor2SMMP_Scoring$"
-TELEMETRY_NAME  = r"$rFactor2SMMP_Telemetry$"
-PORT            = 8765
+def read_snapshot(mm):
+    mm.seek(0)
+    update_begin, update_end, num_vehicles = struct.unpack("<IIi", mm.read(12))
+    if num_vehicles < 1 or update_begin != update_end:
+        return None
+    mm.seek(12)
+    veh = rF2VehicleTelemetryHead.from_buffer_copy(
+        mm.read(ctypes.sizeof(rF2VehicleTelemetryHead)))
+    speed = (veh.mLocalVel.x**2 + veh.mLocalVel.y**2 + veh.mLocalVel.z**2)**0.5 * 3.6
+    return {"speed_kmh": speed, "rpm": veh.mEngineRPM, "gear": veh.mGear,
+            "fuel_l": veh.mFuel, "throttle": veh.mFilteredThrottle,
+            "brake": veh.mFilteredBrake, "steering": veh.mFilteredSteering}
 
-def read_telemetry():
-    try:
-        mm = mmap.mmap(-1, 65536, TELEMETRY_NAME)
-        # Header: version + tick (very simplified parse — full layout is in
-        # https://github.com/TheIronWolfModding/rFactor2SharedMemoryMapPlugin)
-        # For demo we extract speed (m/s), rpm, gear from known offsets.
-        # Adapt offsets to your plugin version.
-        speed = struct.unpack_from("<f", mm, 0x100)[0]
-        rpm   = struct.unpack_from("<f", mm, 0x110)[0]
-        gear  = struct.unpack_from("<i", mm, 0x118)[0]
-        fuel  = struct.unpack_from("<f", mm, 0x120)[0]
-        mm.close()
-        return {"speed_kmh": speed * 3.6, "rpm": rpm, "gear": gear, "fuel_l": fuel}
-    except Exception as e:
-        return {"error": str(e)}
-
-CLIENTS = set()
-
-async def handler(ws):
-    CLIENTS.add(ws)
-    try:
-        async for _ in ws: pass
-    finally:
-        CLIENTS.discard(ws)
-
-async def broadcast():
-    while True:
-        if CLIENTS:
-            data = read_telemetry()
-            data["ts"] = time.time()
-            payload = json.dumps(data)
-            await asyncio.gather(*[c.send(payload) for c in CLIENTS], return_exceptions=True)
-        await asyncio.sleep(1/30)
-
-async def main():
-    print(f"TSR Live Bridge ws://localhost:{PORT}")
-    async with websockets.serve(handler, "localhost", PORT):
-        await broadcast()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# WebSocket loop diffuse 30 Hz à tout client connecté
+# -> code complet : https://github.com/jerome93190/tsr/blob/claude/lemans-web-app-ideas-iCtbP/bridge/tsr_live_bridge.py
 `;
 
 function renderLive() {
@@ -2602,25 +2583,37 @@ function renderLive() {
 
     ${tab === 'instructions' ? `
       <div class="chart-box">
-        <h4>Mise en route</h4>
+        <h4>Mise en route — option rapide (.exe)</h4>
         <ol style="line-height:1.8;color:var(--text);font-size:14px;">
           <li>Vérifier que <code>rFactor2SharedMemoryMapPlugin64.dll</code> est dans <code>LMU/Plugins/</code> (✓ déjà chez vous).</li>
           <li>Activer le plugin dans <code>UserData/player/CustomPluginVariables.JSON</code> :
             <div class="code-block">{ "rFactor2SharedMemoryMapPlugin.dll": { " Enabled":1 } }</div>
           </li>
-          <li>Sur la même machine, télécharger le bridge Python (onglet "Bridge Python") et lancer :
-            <div class="code-block">python tsr_live_bridge.py</div>
+          <li>Télécharger le bridge prêt à l'emploi (compilé automatiquement par GitHub Actions) :
+            <div style="margin:10px 0;">
+              <a class="btn primary" href="https://github.com/jerome93190/tsr/releases/download/bridge-latest/tsr_live_bridge.exe" target="_blank" rel="noopener">⬇ tsr_live_bridge.exe (Windows)</a>
+              <a class="btn ghost" href="https://github.com/jerome93190/tsr/releases/tag/bridge-latest" target="_blank" rel="noopener" style="margin-left:8px;">Voir la release</a>
+            </div>
+            <p class="muted" style="font-size:12px;margin:6px 0 0;">~10 MB · zéro dépendance · double-clic pour lancer · Windows 10/11 64 bits.</p>
+          </li>
+          <li>Double-cliquer sur <code>tsr_live_bridge.exe</code>. Une console s'ouvre et affiche :
+            <div class="code-block">TSR Live Bridge\nListening on ws://localhost:8765</div>
           </li>
           <li>Cliquer "Connecter ws://localhost:8765" en haut à droite.</li>
           <li>Lancer une session dans LMU. Les tuiles HUD s'animent en temps réel.</li>
         </ol>
-        <p class="muted" style="margin-top:16px;">Le bridge fonctionne aussi via réseau local (ouvrir le port 8765) pour afficher le HUD sur tablette/téléphone en second écran.</p>
+        <p class="muted" style="margin-top:16px;">Le bridge écoute sur <code>0.0.0.0:8765</code> donc une tablette/téléphone sur le même Wi-Fi peut s'y connecter en second écran (autoriser le port dans Windows Defender Firewall).</p>
+        <p class="muted" style="margin-top:12px;font-size:13px;">Préférer Python ? Voir l'onglet "Bridge Python" → script source à lancer avec <code>python tsr_live_bridge.py</code>.</p>
       </div>
     ` : tab === 'bridge' ? `
       <div class="chart-box">
-        <h4>tsr_live_bridge.py</h4>
-        <p class="muted" style="margin-bottom:12px;">~50 lignes. Lit la shared memory ~30Hz et la diffuse à tout client WebSocket connecté.</p>
-        <button class="btn primary" id="downloadBridge" style="margin-bottom:12px;">⬇ Télécharger le script</button>
+        <h4>tsr_live_bridge.py — source Python</h4>
+        <p class="muted" style="margin-bottom:12px;">Pour les puristes : lance directement avec <code>python tsr_live_bridge.py</code> (nécessite <code>pip install websockets</code>).</p>
+        <div style="margin-bottom:16px;">
+          <a class="btn primary" href="https://raw.githubusercontent.com/jerome93190/tsr/claude/lemans-web-app-ideas-iCtbP/bridge/tsr_live_bridge.py" target="_blank" rel="noopener" download="tsr_live_bridge.py">⬇ tsr_live_bridge.py</a>
+          <a class="btn ghost" href="https://github.com/jerome93190/tsr/blob/claude/lemans-web-app-ideas-iCtbP/bridge/tsr_live_bridge.py" target="_blank" rel="noopener" style="margin-left:8px;">Voir la source GitHub</a>
+        </div>
+        <p class="muted" style="font-size:13px;margin-bottom:8px;">Aperçu — la classe <code>rF2VehicleTelemetryHead</code> reproduit la struct C++ du plugin v3.7+ avec ctypes, ce qui garantit le bon offset de chaque champ :</p>
         <pre class="code-block" style="white-space:pre;">${escapeHtml(LIVE_BRIDGE_PY)}</pre>
       </div>
     ` : `
@@ -2653,14 +2646,6 @@ function renderLive() {
   if (connectBtn) connectBtn.addEventListener('click', liveConnect);
   const disconnectBtn = document.getElementById('liveDisconnect');
   if (disconnectBtn) disconnectBtn.addEventListener('click', liveDisconnect);
-  const dl = document.getElementById('downloadBridge');
-  if (dl) dl.addEventListener('click', () => {
-    const blob = new Blob([LIVE_BRIDGE_PY], { type: 'text/x-python' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'tsr_live_bridge.py'; a.click();
-    URL.revokeObjectURL(url);
-  });
 }
 
 function liveConnect() {

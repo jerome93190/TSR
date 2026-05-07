@@ -1,0 +1,58 @@
+name: Build Live Bridge .exe
+
+on:
+  push:
+    branches:
+      - main
+      - "claude/**"
+    paths:
+      - "bridge/**"
+      - ".github/workflows/build-bridge.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build deps
+        working-directory: bridge
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build .exe with PyInstaller
+        working-directory: bridge
+        run: |
+          pyinstaller --onefile --console --name tsr_live_bridge tsr_live_bridge.py
+
+      - name: Upload artifact (tsr_live_bridge.exe)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsr_live_bridge-windows
+          path: bridge/dist/tsr_live_bridge.exe
+          if-no-files-found: error
+
+      - name: Publish rolling pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "bridge-latest"
+          # Delete the existing rolling release + tag (ignore errors)
+          gh release delete $tag --yes --cleanup-tag 2>$null
+          # Create a fresh pre-release pointing at the current commit
+          gh release create $tag bridge/dist/tsr_live_bridge.exe `
+            --title "TSR Live Bridge (latest build)" `
+            --notes "Auto-built from $env:GITHUB_SHA on branch $env:GITHUB_REF_NAME.`nDownload the .exe and double-click to run." `
+            --prerelease `
+            --target $env:GITHUB_SHA
