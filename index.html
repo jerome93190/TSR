@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LMU Live Calendar — Le Mans Ultimate</title>
+  <meta name="description" content="Calendrier live des courses officielles Le Mans Ultimate : championnats, endurance, daily, événements spéciaux." />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="brand">
+        <div class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 64 64" width="40" height="40">
+            <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" stroke-width="3"/>
+            <path d="M14 32 L32 14 L50 32 L32 50 Z" fill="none" stroke="currentColor" stroke-width="2"/>
+            <circle cx="32" cy="32" r="4" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>LMU Live Calendar</h1>
+          <p class="tagline">Calendrier officiel Le Mans Ultimate</p>
+        </div>
+      </div>
+
+      <div class="header-meta">
+        <div class="clock" id="liveClock">
+          <span class="clock-label">HEURE LOCALE</span>
+          <span class="clock-time" id="clockTime">--:--:--</span>
+          <span class="clock-tz" id="clockTz">UTC</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="live-banner" id="liveBanner" hidden>
+    <div class="container live-banner-inner">
+      <span class="live-dot"></span>
+      <strong>EN DIRECT :</strong>
+      <span id="liveTitle"></span>
+      <a class="live-link" id="liveLink" href="#" >Voir les détails →</a>
+    </div>
+  </section>
+
+  <main class="container">
+    <section class="controls">
+      <div class="filters" role="tablist" aria-label="Filtrer par catégorie">
+        <button class="filter active" data-filter="all">Tous</button>
+        <button class="filter" data-filter="championship">Championnat</button>
+        <button class="filter" data-filter="endurance">Endurance</button>
+        <button class="filter" data-filter="sprint">Sprint</button>
+        <button class="filter" data-filter="daily">Daily</button>
+        <button class="filter" data-filter="special">Spécial</button>
+      </div>
+
+      <div class="search">
+        <input type="search" id="searchInput" placeholder="Rechercher un circuit, un événement..." aria-label="Recherche" />
+      </div>
+
+      <div class="view-toggle">
+        <button id="toggleView" class="view-btn" aria-pressed="false">
+          <span class="view-on">Afficher passées</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="next-up" id="nextUp" aria-live="polite">
+      <!-- Highlight de la prochaine course majeure -->
+    </section>
+
+    <section class="calendar">
+      <h2 class="section-title">Calendrier</h2>
+      <div id="eventsList" class="events-list">
+        <p class="loading">Chargement du calendrier…</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p>Données : calendrier officiel LMU / WEC 2026 + événements communautaires.</p>
+      <p class="muted">Mise à jour : <span id="lastUpdated">—</span> · Application non affiliée à Motorsport Games / Studio 397.</p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
