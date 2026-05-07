@@ -44,6 +44,7 @@ FALLBACK_WEC_2026 = [
         "id": "wec-qatar-2026",
         "name": "Qatar 1812km",
         "category": "championship",
+        "categories": ["championship", "endurance"],
         "series": "WEC 2026 — Round 1",
         "track": "Lusail International Circuit",
         "country": "Qatar",
@@ -56,6 +57,7 @@ FALLBACK_WEC_2026 = [
         "id": "wec-imola-2026",
         "name": "6 Heures d'Imola",
         "category": "championship",
+        "categories": ["championship"],
         "series": "WEC 2026 — Round 2",
         "track": "Autodromo Enzo e Dino Ferrari",
         "country": "Italie",
@@ -68,6 +70,7 @@ FALLBACK_WEC_2026 = [
         "id": "wec-spa-2026",
         "name": "6 Heures de Spa-Francorchamps",
         "category": "championship",
+        "categories": ["championship"],
         "series": "WEC 2026 — Round 3",
         "track": "Circuit de Spa-Francorchamps",
         "country": "Belgique",
@@ -80,6 +83,7 @@ FALLBACK_WEC_2026 = [
         "id": "lemans24-2026",
         "name": "24 Heures du Mans",
         "category": "endurance",
+        "categories": ["endurance", "championship"],
         "series": "WEC 2026 — Round 4",
         "track": "Circuit de la Sarthe",
         "country": "France",
@@ -92,6 +96,7 @@ FALLBACK_WEC_2026 = [
         "id": "wec-saopaulo-2026",
         "name": "6 Heures de São Paulo",
         "category": "championship",
+        "categories": ["championship"],
         "series": "WEC 2026 — Round 5",
         "track": "Autódromo José Carlos Pace (Interlagos)",
         "country": "Brésil",
@@ -104,6 +109,7 @@ FALLBACK_WEC_2026 = [
         "id": "wec-cota-2026",
         "name": "Lone Star Le Mans (COTA)",
         "category": "championship",
+        "categories": ["championship"],
         "series": "WEC 2026 — Round 6",
         "track": "Circuit of The Americas",
         "country": "USA",
@@ -116,6 +122,7 @@ FALLBACK_WEC_2026 = [
         "id": "wec-fuji-2026",
         "name": "6 Heures de Fuji",
         "category": "championship",
+        "categories": ["championship"],
         "series": "WEC 2026 — Round 7",
         "track": "Fuji Speedway",
         "country": "Japon",
@@ -128,6 +135,7 @@ FALLBACK_WEC_2026 = [
         "id": "wec-bahrain-2026",
         "name": "8 Heures de Bahreïn",
         "category": "endurance",
+        "categories": ["endurance", "championship"],
         "series": "WEC 2026 — Final",
         "track": "Bahrain International Circuit",
         "country": "Bahreïn",
@@ -160,6 +168,7 @@ def build_lmu_events(reference: datetime) -> list[dict]:
             "id": f"lmu-daily-sprint-{d.date().isoformat()}",
             "name": "Daily Sprint Race",
             "category": "daily",
+            "categories": ["daily", "sprint"],
             "series": "Daily LMU",
             "track": track,
             "country": country,
@@ -173,6 +182,7 @@ def build_lmu_events(reference: datetime) -> list[dict]:
             "id": f"lmu-daily-endurance-{d.date().isoformat()}",
             "name": "Daily Endurance Race",
             "category": "daily",
+            "categories": ["daily"],
             "series": "Daily LMU",
             "track": track,
             "country": country,
@@ -199,6 +209,7 @@ def build_lmu_events(reference: datetime) -> list[dict]:
             "id": f"lmu-weekly-sprint-{d.date().isoformat()}",
             "name": "Weekly Sprint Cup",
             "category": "sprint",
+            "categories": ["sprint"],
             "series": "Weekly LMU",
             "track": track,
             "country": country,
@@ -214,6 +225,7 @@ def build_lmu_events(reference: datetime) -> list[dict]:
             "id": "lmu-lemans-virtual",
             "name": "LMU 24h du Mans Virtual",
             "category": "special",
+            "categories": ["special", "endurance"],
             "series": "Événement officiel LMU",
             "track": "Circuit de la Sarthe",
             "country": "France",
@@ -226,6 +238,7 @@ def build_lmu_events(reference: datetime) -> list[dict]:
             "id": "lmu-hyperpole-cup-5",
             "name": "Hyperpole Cup — Manche 5",
             "category": "sprint",
+            "categories": ["sprint"],
             "series": "LMU Hyperpole Series",
             "track": "Bahrain International Circuit",
             "country": "Bahreïn",
@@ -238,6 +251,7 @@ def build_lmu_events(reference: datetime) -> list[dict]:
             "id": "lmu-hypercar-trophy-4",
             "name": "Hypercar Trophy — Round 4",
             "category": "championship",
+            "categories": ["championship"],
             "series": "LMU Hypercar Trophy",
             "track": "Sebring International Raceway",
             "country": "USA",
@@ -250,6 +264,7 @@ def build_lmu_events(reference: datetime) -> list[dict]:
             "id": "lmu-gte-classic",
             "name": "GTE Classic Endurance",
             "category": "endurance",
+            "categories": ["endurance"],
             "series": "LMU Heritage Series",
             "track": "Nürburgring",
             "country": "Allemagne",
@@ -621,6 +636,7 @@ function boot() {
     const data = JSON.parse(document.getElementById('eventsData').textContent);
     state.events = (data.events || []).map(e => ({
       ...e,
+      categories: Array.isArray(e.categories) && e.categories.length ? e.categories : [e.category],
       start: new Date(e.start),
       end: new Date(e.end)
     })).sort((a,b) => a.start - b.start);
@@ -633,6 +649,13 @@ function boot() {
   bindControls();
   render();
   setInterval(render, 1000);
+}
+
+function normalizeSearch(s) {
+  return (s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]/g, '');
 }
 
 function startClock() {
@@ -656,7 +679,7 @@ function bindControls() {
     });
   });
   document.getElementById('searchInput').addEventListener('input', (e) => {
-    state.search = e.target.value.trim().toLowerCase();
+    state.search = normalizeSearch(e.target.value);
     render();
   });
   const toggle = document.getElementById('toggleView');
@@ -680,9 +703,9 @@ function render() {
 }
 
 function matchesFilters(e) {
-  if (state.filter !== 'all' && e.category !== state.filter) return false;
+  if (state.filter !== 'all' && !e.categories.includes(state.filter)) return false;
   if (state.search) {
-    const haystack = [e.name, e.series, e.track, e.country].join(' ').toLowerCase();
+    const haystack = normalizeSearch([e.name, e.series, e.track, e.country].join(' '));
     if (!haystack.includes(state.search)) return false;
   }
   return true;
