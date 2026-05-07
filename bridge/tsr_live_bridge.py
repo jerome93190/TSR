@@ -309,8 +309,50 @@ def safe_str(b: bytes) -> str:
     return b.split(b"\x00", 1)[0].decode("latin-1", errors="ignore").strip()
 
 
+_DUMP_DONE = False
+
+
+def _hex_dump(label: str, data: bytes, base_offset: int = 0):
+    print(f"\n[DUMP] {label} ({len(data)} bytes from offset {base_offset})")
+    for i in range(0, len(data), 16):
+        chunk = data[i:i+16]
+        hex_part = " ".join(f"{b:02x}" for b in chunk)
+        ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        print(f"  {base_offset+i:04x}  {hex_part:<48s}  {ascii_part}")
+
+
+def _diagnose(mm_s: SharedMemView):
+    """One-shot diagnostic: dump scoring header + scoring info + first 200 bytes of mVehicles area."""
+    global _DUMP_DONE
+    if _DUMP_DONE:
+        return
+    _DUMP_DONE = True
+    print("\n" + "=" * 64)
+    print("  DIAGNOSTIC DUMP — first connection to scoring shared memory")
+    print("=" * 64)
+    si_size = ctypes.sizeof(rF2ScoringInfo)
+    vs_size = ctypes.sizeof(rF2VehicleScoring)
+    full_size = ctypes.sizeof(rF2Scoring)
+    print(f"  ctypes computes: ScoringInfo={si_size}B  VehicleScoring={vs_size}B  full={full_size}B")
+    # rF2Scoring starts: 4 (begin) + 4 (end) + 4 (hint) = 12 bytes header,
+    # then mScoringInfo, then mVehicles[].
+    vehicles_offset_ctypes = full_size - 128 * vs_size
+    print(f"  vehicles[0] offset (per ctypes layout): {vehicles_offset_ctypes}")
+    _hex_dump("Header (12 B)", mm_s.read(0, 12), 0)
+    _hex_dump("ScoringInfo first 64 B", mm_s.read(12, 64), 12)
+    _hex_dump("ScoringInfo bytes 64..128", mm_s.read(76, 64), 76)
+    # Around expected vehicles[0] start
+    for guess_offset in (552, 564, 568, 580, 600):
+        _hex_dump(f"Bytes around offset {guess_offset} (potential vehicles[0])",
+                  mm_s.read(guess_offset, 80), guess_offset)
+    print("=" * 64)
+    print("  Send a screenshot of THIS BLOCK to fix the layout once for all.")
+    print("=" * 64 + "\n")
+
+
 def read_scoring(mm: SharedMemView) -> dict | None:
     """Read the entire Scoring shared memory. Returns dict or None if not ready."""
+    _diagnose(mm)
     raw = mm.read(0, ctypes.sizeof(rF2Scoring))
     sc = rF2Scoring.from_buffer_copy(raw)
     if sc.mVersionUpdateBegin != sc.mVersionUpdateEnd or sc.mScoringInfo.mNumVehicles < 1:
