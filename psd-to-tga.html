@@ -132,6 +132,9 @@ main { flex: 1; padding-bottom: 48px; }
   font-family: inherit; font-size: 13px; font-weight: 600;
 }
 .card-role:focus { outline: none; border-color: var(--accent-2); }
+.masknote { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.masknote.ok { color: var(--green); }
+.masknote.warn { color: var(--accent-2); }
 
 .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 20px 0; }
 .btn {
@@ -275,11 +278,15 @@ main { flex: 1; padding-bottom: 48px; }
       <input type="checkbox" id="optInvert" />
       <label for="optInvert">Inverser l'alpha</label>
     </div>
+    <div class="opt check" id="optNoMaskWrap">
+      <input type="checkbox" id="optNoMask" checked />
+      <label for="optNoMask">Ignorer le calque Mask</label>
+    </div>
   </section>
 
   <div id="lmuInfo" class="lmu-info">
     <div class="lmu-info-title">🏁 Mode Le Mans Ultimate</div>
-    <p class="lmu-warn">⚠ Dans Photoshop, <b>avant d'enregistrer le PSD</b> : masquez le calque <b>« Mask »</b> et gardez <b>« Levels »</b> visible — sinon un <b>voile blanc</b> recouvre la livrée en jeu. Enregistrez ensuite avec « Maximiser la compatibilité ».</p>
+    <p class="lmu-warn">✨ <b>Calque « Mask » retiré automatiquement</b> (option « Ignorer le calque Mask » ci-dessus) : plus besoin de le masquer dans Photoshop, le <b>voile blanc</b> est supprimé à la conversion. Nécessite un PSD <b>avec ses calques</b> (la lecture des calques se fait en ligne). <i>À défaut</i> : masquez le calque <b>Mask</b> vous-même, gardez <b>Levels</b> visible, puis ré-enregistrez avec « Maximiser la compatibilité ».</p>
     <p>Sortie forcée en <b>TGA 32 bits non compressé</b> (sinon la livrée s'affiche en noir dans le jeu). Choisissez le rôle de chaque fichier ; il sera nommé automatiquement :
        <span class="tag-file">customskin.tga</span> (design) et <span class="tag-file">customskin_region.tga</span> (matériaux).</p>
     <p>Placez ensuite les fichiers (ou le ZIP décompressé) dans :</p>
@@ -302,7 +309,7 @@ main { flex: 1; padding-bottom: 48px; }
     <h2>Aide — livrées Le Mans Ultimate</h2>
     <ul>
       <li><b>Deux fichiers.</b> LMU attend <span class="tag-file">customskin.tga</span> (le design) et <span class="tag-file">customskin_region.tga</span> (la carte des matériaux / régions). Réglez le rôle de chaque fichier dans sa carte.</li>
-      <li><b>Calque « Mask » → voile blanc.</b> Le convertisseur lit l'image <i>aplatie</i> du PSD. Avant d'enregistrer, masquez le calque <b>Mask</b> du template et gardez <b>Levels</b> visible ; sinon le masque est inclus et la livrée apparaît voilée de blanc en jeu. Ré-enregistrez le PSD (avec « Maximiser la compatibilité ») puis reconvertissez.</li>
+      <li><b>Calque « Mask » (voile blanc) — retiré automatiquement.</b> En Mode LMU, l'option <i>« Ignorer le calque Mask »</i> relit les calques du PSD et inverse le masque du template (la cause du voile blanc), sans toucher au canal alpha ni aux autres calques. Nécessite un PSD <b>avec ses calques</b> et une connexion (lecture via ag-psd). À défaut, masquez le calque <b>Mask</b> dans Photoshop (gardez <b>Levels</b> visible) et ré-enregistrez avec « Maximiser la compatibilité ».</li>
       <li><b>32 bits, non compressé.</b> En Mode LMU c'est imposé automatiquement. En 24 bits ou compressé, la livrée s'affiche en <b>noir</b> dans le jeu.</li>
       <li><b>Dossier du jeu.</b> Copiez les .tga dans <i>…\steamapps\common\Le Mans Ultimate\UserData\Liveries</i>, puis <b>RELOAD</b> dans le showroom. Les réglages de matériaux (carbone, métal, brillance…) se font dans le showroom à partir de <i>customskin_region</i>.</li>
       <li><b>PSD source.</b> RVB 8 bits, enregistré avec « Maximiser la compatibilité » dans Photoshop. Partez des modèles officiels (<i>…\Le Mans Ultimate\Support\LiveryTemplates</i>).</li>
@@ -539,6 +546,66 @@ function makeThumb(img, maxSize) {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Retrait du calque « Mask » du template (option Mode LMU).
+ *  La lecture des calques individuels nécessite ag-psd (chargé à la
+ *  demande depuis le CDN). On inverse la fusion « Normal » du calque
+ *  Mask sur l'image aplatie : below = (F − Mask·a) / (1 − a). Cela
+ *  préserve le canal alpha (spéc) et les réglages déjà appliqués.
+ * ------------------------------------------------------------------ */
+
+let _agPsd = null, _agPsdPromise = null;
+function loadAgPsd() {
+  if (_agPsd) return Promise.resolve(_agPsd);
+  if (_agPsdPromise) return _agPsdPromise;
+  _agPsdPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/ag-psd/dist/bundle.js";
+    s.async = true;
+    s.onload = () => { if (window.agPsd) { _agPsd = window.agPsd; resolve(_agPsd); } else reject(new Error("ag-psd indisponible")); };
+    s.onerror = () => reject(new Error("chargement impossible (hors-ligne ?)"));
+    document.head.appendChild(s);
+  });
+  return _agPsdPromise;
+}
+
+// Inverse la fusion des calques « Mask » visibles au sommet de la pile.
+// Renvoie { data:Uint8ClampedArray (RGBA), removed:[noms] } ou null si rien.
+async function removeMaskLayers(buffer, width, height, baseRgba) {
+  const agPsd = await loadAgPsd();
+  const psd = agPsd.readPsd(buffer, { skipThumbnail: true, skipCompositeImageData: true });
+  const top = psd.children || [];
+  const out = new Uint8ClampedArray(baseRgba);           // copie de travail = F (composite)
+  const removed = [];
+  const tmp = document.createElement("canvas");
+  tmp.width = width; tmp.height = height;
+  const tctx = tmp.getContext("2d");
+  // ag-psd place le calque du sommet en children[0] : on parcourt du haut vers le bas.
+  for (let i = 0; i < top.length; i++) {
+    const layer = top[i];
+    if (layer.hidden) continue;                          // calque masqué : absent du composite
+    const isMask = /mask|masque/i.test(layer.name || "");
+    const normal = !layer.blendMode || layer.blendMode === "normal";
+    if (!(isMask && normal && layer.canvas)) break;      // 1er calque visible non-Mask → on s'arrête
+    let op = (layer.opacity == null) ? 1 : layer.opacity;
+    if (op > 1) op = op / 255;                           // ag-psd peut donner 0–255 ou 0–1
+    tctx.clearRect(0, 0, width, height);
+    tctx.drawImage(layer.canvas, layer.left || 0, layer.top || 0);
+    const m = tctx.getImageData(0, 0, width, height).data;
+    for (let p = 0; p < width * height; p++) {
+      const a = op * (m[p * 4 + 3] / 255);               // alpha effectif du masque (0–1)
+      if (a <= 0 || a >= 0.9961) continue;               // nul (rien) ou ~opaque (design indéfini)
+      const o = p * 4, inv = 1 / (1 - a);
+      out[o]     = Math.round((out[o]     - m[o]     * a) * inv);
+      out[o + 1] = Math.round((out[o + 1] - m[o + 1] * a) * inv);
+      out[o + 2] = Math.round((out[o + 2] - m[o + 2] * a) * inv);
+      // canal alpha (spéc) laissé intact
+    }
+    removed.push(layer.name || "Mask");
+  }
+  return removed.length ? { data: out, removed } : null;
+}
+
+/* ------------------------------------------------------------------ *
  *  Archive ZIP (méthode « stockée », sans compression) + CRC32.
  * ------------------------------------------------------------------ */
 
@@ -622,12 +689,18 @@ const btnZip     = document.getElementById("btnZip");
 const btnClear   = document.getElementById("btnClear");
 const statusLine = document.getElementById("statusLine");
 
+let busy = false;
+function setBusy(b) {
+  busy = b;
+  btnConvert.textContent = b ? "Conversion…" : "Convertir tout";
+  refreshButtons();
+}
 function refreshButtons() {
   const ready = items.filter(i => i.status === "ready").length;
   const converted = items.filter(i => i.tgaBytes).length;
-  btnConvert.disabled = ready === 0;
-  btnZip.disabled = converted < 1;
-  btnClear.disabled = items.length === 0;
+  btnConvert.disabled = busy || ready === 0;
+  btnZip.disabled = busy || converted < 1;
+  btnClear.disabled = busy || items.length === 0;
 }
 
 function render() {
@@ -662,6 +735,10 @@ function render() {
       if (it.tgaBytes) {
         meta += '<div class="card-meta"><span>→ ' + it.outDims[0] + '×' + it.outDims[1]
               + '</span><span>TGA ' + it.outBits + ' bit</span><span>' + fmtBytes(it.tgaBytes.length) + '</span></div>';
+      }
+      if (it.maskNote) {
+        const cls = it.maskNote[0] === "✓" ? "ok" : (it.maskNote[0] === "⚠" ? "warn" : "");
+        meta += '<div class="masknote ' + cls + '">' + escapeHtml(it.maskNote) + '</div>';
       }
       body.insertAdjacentHTML("beforeend", meta);
 
@@ -734,6 +811,7 @@ async function addFiles(fileList) {
     try {
       const buf = await file.arrayBuffer();
       it.img = parsePsd(buf);
+      it.buf = buf;                      // conservé pour la lecture des calques (retrait du Mask)
       it.thumb = makeThumb(it.img, 320);
       // Rôle LMU déduit du nom : « ...region... » → carte des matériaux, sinon design.
       it.role = /region|materi|mat[ée]riau|spec/i.test(it.name) ? "customskin_region.tga" : "customskin.tga";
@@ -751,6 +829,7 @@ async function addFiles(fileList) {
 function getOpts() {
   return {
     lmu: document.getElementById("optLmu").checked,
+    noMask: document.getElementById("optNoMask").checked,
     format: document.getElementById("optFormat").value,
     size: document.getElementById("optSize").value,
     rle: document.getElementById("optRle").checked,
@@ -758,30 +837,53 @@ function getOpts() {
   };
 }
 
-function convertAll() {
+async function convertAll() {
   const opts = getOpts();
+  setBusy(true);
   let done = 0;
   for (const it of items) {
     if (it.status !== "ready") continue;
     try {
       let img = it.img;
-      if (opts.size !== "orig") img = resizeImg(img, parseInt(opts.size, 10));
+      it.maskNote = "";
+      // Mode LMU : retrait automatique du calque « Mask » du template.
+      if (opts.lmu && opts.noMask && it.buf) {
+        try {
+          const res = await removeMaskLayers(it.buf, it.img.width, it.img.height, it.img.data);
+          if (res) {
+            img = { width: it.img.width, height: it.img.height, data: res.data,
+                    hasAlpha: it.img.hasAlpha, mode: it.img.mode, depth: it.img.depth };
+            it.thumb = makeThumb(img, 320);            // aperçu sans le voile
+            it.maskNote = "✓ calque retiré : " + res.removed.join(", ");
+          } else {
+            it.maskNote = "aucun calque Mask visible";
+          }
+        } catch (e) {
+          it.maskNote = "⚠ Mask non retiré (" + (e.message || e) + ") — masquez-le dans Photoshop";
+        }
+        render();
+        await new Promise(r => setTimeout(r, 0));
+      }
+      let work = img;
+      if (opts.size !== "orig") work = resizeImg(work, parseInt(opts.size, 10));
       // Mode LMU : 32 bits non compressé, exigé par Le Mans Ultimate.
-      const bits = opts.lmu ? 32 : (opts.format === "auto" ? (img.hasAlpha ? 32 : 24) : parseInt(opts.format, 10));
+      const bits = opts.lmu ? 32 : (opts.format === "auto" ? (work.hasAlpha ? 32 : 24) : parseInt(opts.format, 10));
       const rle = opts.lmu ? false : opts.rle;
-      const tga = encodeTga(img, { bits, rle, invertAlpha: opts.invertAlpha });
+      const tga = encodeTga(work, { bits, rle, invertAlpha: opts.invertAlpha });
       if (it.url) URL.revokeObjectURL(it.url);
       it.tgaBytes = tga;
       it.outName = opts.lmu ? (it.role || "customskin.tga") : (baseName(it.name) + ".tga");
       it.outBits = bits;
-      it.outDims = [img.width, img.height];
+      it.outDims = [work.width, work.height];
       it.url = URL.createObjectURL(new Blob([tga], { type: "image/tga" }));
       done++;
     } catch (e) {
       it.status = "error"; it.error = e.message || String(e);
     }
+    render();
+    await new Promise(r => setTimeout(r, 0));
   }
-  render();
+  setBusy(false);
   const dup = lmuDuplicateRoles();
   setStatus(done + " fichier(s) converti(s) en TGA." +
     (dup ? "  ⚠ Deux fichiers ont le rôle « " + dup + " » — changez-en un avant de copier dans le jeu." : ""));
@@ -843,6 +945,7 @@ function applyLmuMode() {
   rle.closest(".opt").classList.toggle("disabled", on);
   if (on) { fmt.value = "32"; rle.checked = false; }
   document.getElementById("lmuInfo").style.display = on ? "block" : "none";
+  document.getElementById("optNoMaskWrap").style.display = on ? "flex" : "none";
   btnZip.textContent = on ? "Télécharger customskin + region (ZIP)" : "Télécharger le ZIP";
   render();
 }
