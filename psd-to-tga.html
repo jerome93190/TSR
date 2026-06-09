@@ -111,6 +111,11 @@ main { flex: 1; padding-bottom: 48px; }
 }
 .lmu-info-title { font-weight: 700; letter-spacing: .5px; margin-bottom: 4px; }
 .lmu-info p { margin: 6px 0; color: var(--muted); font-size: 14px; }
+.lmu-warn {
+  margin: 10px 0 !important; padding: 10px 12px; color: var(--text) !important;
+  background: rgba(255,60,60,.10); border: 1px solid rgba(255,60,60,.4);
+  border-radius: 8px; font-size: 13.5px !important;
+}
 .lmu-info code {
   display: inline-block; background: var(--bg-3); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 10px; margin: 2px 0;
@@ -274,6 +279,7 @@ main { flex: 1; padding-bottom: 48px; }
 
   <div id="lmuInfo" class="lmu-info">
     <div class="lmu-info-title">🏁 Mode Le Mans Ultimate</div>
+    <p class="lmu-warn">⚠ Dans Photoshop, <b>avant d'enregistrer le PSD</b> : masquez le calque <b>« Mask »</b> et gardez <b>« Levels »</b> visible — sinon un <b>voile blanc</b> recouvre la livrée en jeu. Enregistrez ensuite avec « Maximiser la compatibilité ».</p>
     <p>Sortie forcée en <b>TGA 32 bits non compressé</b> (sinon la livrée s'affiche en noir dans le jeu). Choisissez le rôle de chaque fichier ; il sera nommé automatiquement :
        <span class="tag-file">customskin.tga</span> (design) et <span class="tag-file">customskin_region.tga</span> (matériaux).</p>
     <p>Placez ensuite les fichiers (ou le ZIP décompressé) dans :</p>
@@ -296,6 +302,7 @@ main { flex: 1; padding-bottom: 48px; }
     <h2>Aide — livrées Le Mans Ultimate</h2>
     <ul>
       <li><b>Deux fichiers.</b> LMU attend <span class="tag-file">customskin.tga</span> (le design) et <span class="tag-file">customskin_region.tga</span> (la carte des matériaux / régions). Réglez le rôle de chaque fichier dans sa carte.</li>
+      <li><b>Calque « Mask » → voile blanc.</b> Le convertisseur lit l'image <i>aplatie</i> du PSD. Avant d'enregistrer, masquez le calque <b>Mask</b> du template et gardez <b>Levels</b> visible ; sinon le masque est inclus et la livrée apparaît voilée de blanc en jeu. Ré-enregistrez le PSD (avec « Maximiser la compatibilité ») puis reconvertissez.</li>
       <li><b>32 bits, non compressé.</b> En Mode LMU c'est imposé automatiquement. En 24 bits ou compressé, la livrée s'affiche en <b>noir</b> dans le jeu.</li>
       <li><b>Dossier du jeu.</b> Copiez les .tga dans <i>…\steamapps\common\Le Mans Ultimate\UserData\Liveries</i>, puis <b>RELOAD</b> dans le showroom. Les réglages de matériaux (carbone, métal, brillance…) se font dans le showroom à partir de <i>customskin_region</i>.</li>
       <li><b>PSD source.</b> RVB 8 bits, enregistré avec « Maximiser la compatibilité » dans Photoshop. Partez des modèles officiels (<i>…\Le Mans Ultimate\Support\LiveryTemplates</i>).</li>
