@@ -302,8 +302,9 @@ main { flex: 1; padding-bottom: 48px; }
       <span class="reg" style="background:#27ae60">vert = Option 1</span>
       <span class="reg" style="background:#2563c0">bleu = Option 2</span>
       <span class="reg" style="background:#fff;color:#000;border-color:#ccc">blanc = logos/n°</span>.
-      Partez de la carte de région du template, ou générez une base de travail :
-      <button id="btnRegion" class="btn ghost" type="button" style="margin-top:10px">Générer customskin_region (noir = Base)</button></p>
+      Si votre PSD contient un <b>groupe « Region »</b> (calques Region 0→4 couleur + masque), l'appli peut le composer automatiquement :
+      <button id="btnExtractRegion" class="btn" type="button" style="margin-top:10px">Extraire customskin_region du PSD</button>
+      <button id="btnRegion" class="btn ghost" type="button" style="margin-top:10px">…ou générer un fond noir (Base)</button></p>
   </div>
 
   <div class="actions">
@@ -320,7 +321,7 @@ main { flex: 1; padding-bottom: 48px; }
   <section class="help">
     <h2>Aide — livrées Le Mans Ultimate</h2>
     <ul>
-      <li><b>Deux fichiers <u>différents</u>.</b> <span class="tag-file">customskin.tga</span> = votre design. <span class="tag-file">customskin_region.tga</span> = la carte des zones de matériau, faite d'<b>aplats de couleurs unies</b> (⬛ noir = Base, 🟥 rouge = Carbone, 🟩 vert = Option 1, 🟦 bleu = Option 2, ⬜ blanc = logos/numéros) — <b>ce n'est pas votre design</b>. Utilisez celle du template, ou le bouton « Générer customskin_region » ci-dessus. Ne la redimensionnez jamais (les couleurs doivent rester franches).</li>
+      <li><b>Deux fichiers <u>différents</u>.</b> <span class="tag-file">customskin.tga</span> = votre design. <span class="tag-file">customskin_region.tga</span> = la carte des zones de matériau, faite d'<b>aplats de couleurs unies</b> (⬛ noir = Base, 🟥 rouge = Carbone, 🟩 vert = Option 1, 🟦 bleu = Option 2, ⬜ blanc = logos/numéros) — <b>ce n'est pas votre design</b>. Si votre PSD a un <b>groupe « Region »</b> (calques Region 0→4), le bouton <i>« Extraire customskin_region du PSD »</i> la compose tout seul ; sinon utilisez celle du template ou « Générer un fond noir ». Ne la redimensionnez jamais (les couleurs doivent rester franches).</li>
       <li><b>Calque « Mask » (voile blanc) — retiré automatiquement.</b> En Mode LMU, l'option <i>« Ignorer le calque Mask »</i> relit les calques du PSD et inverse le masque du template (la cause du voile blanc), sans toucher au canal alpha ni aux autres calques. Nécessite un PSD <b>avec ses calques</b> et une connexion (lecture via ag-psd). À défaut, masquez le calque <b>Mask</b> dans Photoshop (gardez <b>Levels</b> visible) et ré-enregistrez avec « Maximiser la compatibilité ».</li>
       <li><b>32 bits, non compressé.</b> En Mode LMU c'est imposé automatiquement. En 24 bits ou compressé, la livrée s'affiche en <b>noir</b> dans le jeu.</li>
       <li><b>Dossier du jeu.</b> Copiez les .tga dans <i>…\steamapps\common\Le Mans Ultimate\UserData\Liveries</i>, puis <b>RELOAD</b> dans le showroom. Les réglages de matériaux (carbone, métal, brillance…) se font dans le showroom à partir de <i>customskin_region</i>.</li>
@@ -615,6 +616,73 @@ async function removeMaskLayers(buffer, width, height, baseRgba) {
     removed.push(layer.name || "Mask");
   }
   return removed.length ? { data: out, removed } : null;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Extraction de la carte de région depuis le groupe « Region » du PSD.
+ *  Chaque calque = une couleur unie + un masque ; on les composite
+ *  (du bas vers le haut) pour reconstituer la carte d'aplats.
+ *  Validé contre la structure réelle d'ag-psd (couleur dans le canvas,
+ *  masque en niveaux de gris séparé, opacité 0–1, children[0] = sommet).
+ * ------------------------------------------------------------------ */
+
+function findRegionGroup(nodes) {
+  for (const n of (nodes || [])) if (n.children && /r[ée]gions?/i.test(n.name || "")) return n;
+  for (const n of (nodes || [])) if (n.children) { const f = findRegionGroup(n.children); if (f) return f; }
+  return null;
+}
+function readPixels(src) {
+  if (src.canvas) { const c = src.canvas; return { d: c.getContext("2d").getImageData(0, 0, c.width, c.height).data, w: c.width, h: c.height }; }
+  if (src.imageData) return { d: src.imageData.data, w: src.imageData.width, h: src.imageData.height };
+  return null;
+}
+function nodeColor(node) {
+  if (node.canvas || node.imageData) {
+    const px = readPixels(node);
+    for (let p = 0; p < px.d.length; p += 4) if (px.d[p + 3] > 16) return [px.d[p], px.d[p + 1], px.d[p + 2]];
+  }
+  const c = node.vectorFill && node.vectorFill.color;   // calque de remplissage couleur unie
+  if (c) { const cv = v => v == null ? 0 : (v <= 1 ? Math.round(v * 255) : Math.round(v)); return [cv(c.r), cv(c.g), cv(c.b)]; }
+  return null;
+}
+function nodeCoverage(node, W, H) {
+  const cov = new Uint8Array(W * H), m = node.mask;
+  if (m && !m.disabled && (m.canvas || m.imageData)) {
+    const def = m.defaultColor == null ? 0 : m.defaultColor; if (def) cov.fill(def);
+    const px = readPixels(m), ml = m.left || 0, mt = m.top || 0;
+    for (let y = 0; y < px.h; y++) { const Y = mt + y; if (Y < 0 || Y >= H) continue;
+      for (let x = 0; x < px.w; x++) { const X = ml + x; if (X < 0 || X >= W) continue; cov[Y * W + X] = px.d[(y * px.w + x) * 4]; } }
+    return cov;
+  }
+  if (node.canvas || node.imageData) {                  // pas de masque : on prend l'alpha du calque
+    const px = readPixels(node), ll = node.left || 0, lt = node.top || 0;
+    for (let y = 0; y < px.h; y++) { const Y = lt + y; if (Y < 0 || Y >= H) continue;
+      for (let x = 0; x < px.w; x++) { const X = ll + x; if (X < 0 || X >= W) continue; cov[Y * W + X] = px.d[(y * px.w + x) * 4 + 3]; } }
+    return cov;
+  }
+  cov.fill(255); return cov;
+}
+function extractRegion(group, W, H) {
+  const kids = group.children || [];
+  const out = new Uint8ClampedArray(W * H * 4);
+  for (let i = 0; i < W * H; i++) out[i * 4 + 3] = 255; // région opaque
+  let drew = 0;
+  for (let i = kids.length - 1; i >= 0; i--) {          // bas → haut (children[0] = sommet)
+    const layer = kids[i];
+    if (layer.hidden) continue;
+    const color = nodeColor(layer); if (!color) continue;
+    const cov = nodeCoverage(layer, W, H);
+    let op = layer.opacity == null ? 1 : layer.opacity; if (op > 1) op /= 255;
+    for (let p = 0; p < W * H; p++) {
+      const a = (cov[p] / 255) * op; if (a <= 0) continue;
+      const o = p * 4;
+      out[o]     = Math.round(out[o]     * (1 - a) + color[0] * a);
+      out[o + 1] = Math.round(out[o + 1] * (1 - a) + color[1] * a);
+      out[o + 2] = Math.round(out[o + 2] * (1 - a) + color[2] * a);
+    }
+    drew++;
+  }
+  return drew ? out : null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -929,6 +997,30 @@ function generateRegion() {
   setStatus("customskin_region.tga généré — " + W + "×" + H + " px, tout en Base (noir). Peignez des zones rouge/vert/bleu/blanc par-dessus si besoin.");
 }
 
+// Extrait customskin_region depuis le groupe « Region » du PSD chargé (calques couleur + masque).
+async function extractRegionFromPsd() {
+  const ref = items.find(i => i.status === "ready" && i.buf);
+  if (!ref) { setStatus("Chargez d'abord votre PSD (celui qui contient le groupe « Region »)."); return; }
+  setBusy(true);
+  setStatus("Lecture des calques du PSD… (peut prendre quelques secondes)");
+  await new Promise(r => setTimeout(r, 0));
+  try {
+    const agPsd = await loadAgPsd();
+    const psd = agPsd.readPsd(ref.buf, { skipThumbnail: true, skipCompositeImageData: true });
+    const group = findRegionGroup(psd.children || []);
+    if (!group) { setStatus("⚠ Groupe « Region » introuvable dans le PSD — vérifiez le nom du groupe."); setBusy(false); return; }
+    const W = psd.width, H = psd.height;
+    const data = extractRegion(group, W, H);
+    if (!data) { setStatus("⚠ Aucun calque exploitable dans le groupe « Region »."); setBusy(false); return; }
+    const tga = encodeTga({ width: W, height: H, data }, { bits: 32, rle: false });
+    download(new Blob([tga], { type: "image/tga" }), "customskin_region.tga");
+    setStatus("✓ customskin_region.tga extrait du groupe « Region » — " + W + "×" + H + " px, " + (group.children || []).length + " calques composés.");
+  } catch (e) {
+    setStatus("⚠ Extraction impossible : " + (e.message || e) + ". Utilisez la méthode manuelle (n'afficher que le groupe Region).");
+  }
+  setBusy(false);
+}
+
 /* Événements ---------------------------------------------------------- */
 dropzone.addEventListener("click", () => fileInput.click());
 dropzone.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
@@ -954,6 +1046,7 @@ btnZip.addEventListener("click", () => {
   download(buildZip(files), lmu ? "lmu-livery.zip" : "livrees-tga.zip");
 });
 document.getElementById("btnRegion").addEventListener("click", generateRegion);
+document.getElementById("btnExtractRegion").addEventListener("click", extractRegionFromPsd);
 btnClear.addEventListener("click", () => {
   items.forEach(i => { if (i.url) URL.revokeObjectURL(i.url); });
   items.length = 0;
