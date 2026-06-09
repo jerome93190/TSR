@@ -98,6 +98,35 @@ main { flex: 1; padding-bottom: 48px; }
 .opt.check { display: flex; align-items: center; gap: 10px; padding-top: 18px; }
 .opt.check input { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
 .opt.check label { margin: 0; text-transform: none; letter-spacing: .3px; font-size: 14px; color: var(--text); font-weight: 600; cursor: pointer; }
+.opt.check.lmu { padding-top: 14px; }
+.opt.check.lmu input { accent-color: var(--accent-2); }
+.opt.check.lmu label { color: var(--accent-2); }
+.opt.disabled { opacity: .4; pointer-events: none; }
+
+/* Encart Mode LMU */
+.lmu-info {
+  margin-top: 16px; padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(255,60,60,.08), rgba(255,184,77,.05)), var(--bg-2);
+  border: 1px solid rgba(255,184,77,.35); border-radius: var(--radius);
+}
+.lmu-info-title { font-weight: 700; letter-spacing: .5px; margin-bottom: 4px; }
+.lmu-info p { margin: 6px 0; color: var(--muted); font-size: 14px; }
+.lmu-info code {
+  display: inline-block; background: var(--bg-3); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; margin: 2px 0;
+  font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: var(--text); word-break: break-all;
+}
+.tag-file {
+  display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  background: rgba(61,220,132,.12); color: var(--green);
+  border: 1px solid rgba(61,220,132,.35); border-radius: 6px; padding: 2px 7px; margin: 0 2px;
+}
+.card-role {
+  width: 100%; background: var(--bg-3); color: var(--text);
+  border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+}
+.card-role:focus { outline: none; border-color: var(--accent-2); }
 
 .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 20px 0; }
 .btn {
@@ -211,11 +240,15 @@ main { flex: 1; padding-bottom: 48px; }
   </div>
 
   <section class="options" aria-label="Options de conversion">
+    <div class="opt check lmu">
+      <input type="checkbox" id="optLmu" checked />
+      <label for="optLmu">Mode LMU</label>
+    </div>
     <div class="opt">
       <label for="optFormat">Format de sortie</label>
       <select id="optFormat">
-        <option value="auto" selected>Auto (alpha si présent)</option>
-        <option value="32">32 bits — RGBA (avec alpha)</option>
+        <option value="auto">Auto (alpha si présent)</option>
+        <option value="32" selected>32 bits — RGBA (avec alpha)</option>
         <option value="24">24 bits — RGB (sans alpha)</option>
       </select>
     </div>
@@ -239,6 +272,15 @@ main { flex: 1; padding-bottom: 48px; }
     </div>
   </section>
 
+  <div id="lmuInfo" class="lmu-info">
+    <div class="lmu-info-title">🏁 Mode Le Mans Ultimate</div>
+    <p>Sortie forcée en <b>TGA 32 bits non compressé</b> (sinon la livrée s'affiche en noir dans le jeu). Choisissez le rôle de chaque fichier ; il sera nommé automatiquement :
+       <span class="tag-file">customskin.tga</span> (design) et <span class="tag-file">customskin_region.tga</span> (matériaux).</p>
+    <p>Placez ensuite les fichiers (ou le ZIP décompressé) dans :</p>
+    <code>…\steamapps\common\Le Mans Ultimate\UserData\Liveries</code>
+    <p>puis cliquez sur <b>RELOAD</b> dans le showroom du jeu. Les modèles de base sont dans <code>…\Le Mans Ultimate\Support\LiveryTemplates</code>.</p>
+  </div>
+
   <div class="actions">
     <button id="btnConvert" class="btn" disabled>Convertir tout</button>
     <button id="btnZip" class="btn ghost" disabled>Télécharger le ZIP</button>
@@ -251,14 +293,14 @@ main { flex: 1; padding-bottom: 48px; }
   </section>
 
   <section class="help">
-    <h2>À propos</h2>
+    <h2>Aide — livrées Le Mans Ultimate</h2>
     <ul>
-      <li><b>Alpha = spécularité.</b> Sur le moteur rFactor 2 / Le Mans Ultimate, le canal alpha de la texture de livrée sert souvent de carte de spécularité / réflectivité. Le mode « 32 bits » (ou « Auto ») le conserve.</li>
-      <li><b>Maximiser la compatibilité.</b> Enregistrez votre PSD avec l'option « Maximiser la compatibilité des fichiers » activée dans Photoshop, afin que l'image aplatie soit lisible.</li>
-      <li><b>RGB 8 bits.</b> Le PSD doit être en mode RVB (ou Niveaux de gris), 8 bits par couche. Convertissez via <i>Image &gt; Mode</i> si besoin.</li>
-      <li><b>Compression RLE</b> réduit la taille du .tga sans perte ; laissez-la décochée pour une compatibilité maximale.</li>
+      <li><b>Deux fichiers.</b> LMU attend <span class="tag-file">customskin.tga</span> (le design) et <span class="tag-file">customskin_region.tga</span> (la carte des matériaux / régions). Réglez le rôle de chaque fichier dans sa carte.</li>
+      <li><b>32 bits, non compressé.</b> En Mode LMU c'est imposé automatiquement. En 24 bits ou compressé, la livrée s'affiche en <b>noir</b> dans le jeu.</li>
+      <li><b>Dossier du jeu.</b> Copiez les .tga dans <i>…\steamapps\common\Le Mans Ultimate\UserData\Liveries</i>, puis <b>RELOAD</b> dans le showroom. Les réglages de matériaux (carbone, métal, brillance…) se font dans le showroom à partir de <i>customskin_region</i>.</li>
+      <li><b>PSD source.</b> RVB 8 bits, enregistré avec « Maximiser la compatibilité » dans Photoshop. Partez des modèles officiels (<i>…\Le Mans Ultimate\Support\LiveryTemplates</i>).</li>
     </ul>
-    <p class="note">Tout est traité localement dans le navigateur — vos fichiers ne quittent jamais votre ordinateur.</p>
+    <p class="note">Tout est traité localement dans le navigateur — vos fichiers ne quittent jamais votre ordinateur. Spécifications d'après le guide officiel Le Mans Ultimate et les guides communautaires (RaceControl, OverTake).</p>
   </section>
 </main>
 
@@ -616,11 +658,23 @@ function render() {
       }
       body.insertAdjacentHTML("beforeend", meta);
 
+      // Mode LMU : sélecteur de rôle → nom de fichier attendu par le jeu.
+      if (document.getElementById("optLmu").checked) {
+        const sel = document.createElement("select");
+        sel.className = "card-role";
+        sel.innerHTML =
+          '<option value="customskin.tga">customskin.tga — design</option>' +
+          '<option value="customskin_region.tga">customskin_region.tga — matériaux</option>';
+        sel.value = it.role || "customskin.tga";
+        sel.onchange = () => { it.role = sel.value; if (it.tgaBytes) it.outName = it.role; render(); };
+        body.appendChild(sel);
+      }
+
       const foot = document.createElement("div");
       foot.className = "card-foot";
       const dl = document.createElement("a");
       dl.className = "dl" + (it.url ? "" : " disabled");
-      dl.textContent = it.url ? "Télécharger .tga" : "Convertir d'abord";
+      dl.textContent = it.url ? ("Télécharger " + it.outName) : "Convertir d'abord";
       if (it.url) { dl.href = it.url; dl.download = it.outName; }
       foot.appendChild(dl);
       const rm = document.createElement("button");
@@ -674,6 +728,8 @@ async function addFiles(fileList) {
       const buf = await file.arrayBuffer();
       it.img = parsePsd(buf);
       it.thumb = makeThumb(it.img, 320);
+      // Rôle LMU déduit du nom : « ...region... » → carte des matériaux, sinon design.
+      it.role = /region|materi|mat[ée]riau|spec/i.test(it.name) ? "customskin_region.tga" : "customskin.tga";
       it.status = "ready";
     } catch (e) {
       it.status = "error";
@@ -687,6 +743,7 @@ async function addFiles(fileList) {
 
 function getOpts() {
   return {
+    lmu: document.getElementById("optLmu").checked,
     format: document.getElementById("optFormat").value,
     size: document.getElementById("optSize").value,
     rle: document.getElementById("optRle").checked,
@@ -702,11 +759,13 @@ function convertAll() {
     try {
       let img = it.img;
       if (opts.size !== "orig") img = resizeImg(img, parseInt(opts.size, 10));
-      const bits = opts.format === "auto" ? (img.hasAlpha ? 32 : 24) : parseInt(opts.format, 10);
-      const tga = encodeTga(img, { bits, rle: opts.rle, invertAlpha: opts.invertAlpha });
+      // Mode LMU : 32 bits non compressé, exigé par Le Mans Ultimate.
+      const bits = opts.lmu ? 32 : (opts.format === "auto" ? (img.hasAlpha ? 32 : 24) : parseInt(opts.format, 10));
+      const rle = opts.lmu ? false : opts.rle;
+      const tga = encodeTga(img, { bits, rle, invertAlpha: opts.invertAlpha });
       if (it.url) URL.revokeObjectURL(it.url);
       it.tgaBytes = tga;
-      it.outName = baseName(it.name) + ".tga";
+      it.outName = opts.lmu ? (it.role || "customskin.tga") : (baseName(it.name) + ".tga");
       it.outBits = bits;
       it.outDims = [img.width, img.height];
       it.url = URL.createObjectURL(new Blob([tga], { type: "image/tga" }));
@@ -716,7 +775,22 @@ function convertAll() {
     }
   }
   render();
-  setStatus(done + " fichier(s) converti(s) en TGA.");
+  const dup = lmuDuplicateRoles();
+  setStatus(done + " fichier(s) converti(s) en TGA." +
+    (dup ? "  ⚠ Deux fichiers ont le rôle « " + dup + " » — changez-en un avant de copier dans le jeu." : ""));
+}
+
+// En Mode LMU, signale si deux fichiers portent le même nom de sortie.
+function lmuDuplicateRoles() {
+  if (!document.getElementById("optLmu").checked) return null;
+  const seen = {};
+  for (const it of items) {
+    if (!it.tgaBytes) continue;
+    const r = it.outName || (it.role || "customskin.tga");
+    if (seen[r]) return r;
+    seen[r] = true;
+  }
+  return null;
 }
 
 function setStatus(msg) { statusLine.textContent = msg; }
@@ -742,7 +816,8 @@ btnConvert.addEventListener("click", convertAll);
 btnZip.addEventListener("click", () => {
   const files = items.filter(i => i.tgaBytes).map(i => ({ name: i.outName, bytes: i.tgaBytes }));
   if (!files.length) return;
-  download(buildZip(files), "livrees-tga.zip");
+  const lmu = document.getElementById("optLmu").checked;
+  download(buildZip(files), lmu ? "lmu-livery.zip" : "livrees-tga.zip");
 });
 btnClear.addEventListener("click", () => {
   items.forEach(i => { if (i.url) URL.revokeObjectURL(i.url); });
@@ -751,7 +826,22 @@ btnClear.addEventListener("click", () => {
   render();
 });
 
-render();
+// Mode LMU : impose le TGA 32 bits non compressé et affiche le guide d'installation.
+function applyLmuMode() {
+  const on = document.getElementById("optLmu").checked;
+  const fmt = document.getElementById("optFormat");
+  const rle = document.getElementById("optRle");
+  fmt.disabled = on; rle.disabled = on;
+  fmt.closest(".opt").classList.toggle("disabled", on);
+  rle.closest(".opt").classList.toggle("disabled", on);
+  if (on) { fmt.value = "32"; rle.checked = false; }
+  document.getElementById("lmuInfo").style.display = on ? "block" : "none";
+  btnZip.textContent = on ? "Télécharger customskin + region (ZIP)" : "Télécharger le ZIP";
+  render();
+}
+document.getElementById("optLmu").addEventListener("change", applyLmuMode);
+
+applyLmuMode();
 </script>
 </body>
 </html>
