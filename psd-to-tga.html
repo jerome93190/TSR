@@ -126,6 +126,10 @@ main { flex: 1; padding-bottom: 48px; }
   background: rgba(61,220,132,.12); color: var(--green);
   border: 1px solid rgba(61,220,132,.35); border-radius: 6px; padding: 2px 7px; margin: 0 2px;
 }
+.reg {
+  display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  color: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; margin: 2px;
+}
 .card-role {
   width: 100%; background: var(--bg-3); color: var(--text);
   border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px;
@@ -292,6 +296,14 @@ main { flex: 1; padding-bottom: 48px; }
     <p>Placez ensuite les fichiers (ou le ZIP décompressé) dans :</p>
     <code>…\steamapps\common\Le Mans Ultimate\UserData\Liveries</code>
     <p>puis cliquez sur <b>RELOAD</b> dans le showroom du jeu. Les modèles de base sont dans <code>…\Le Mans Ultimate\Support\LiveryTemplates</code>.</p>
+    <p class="lmu-warn">🎨 <b>customskin_region = des aplats de couleurs</b> (zones de matériau), <b>pas votre design</b> :
+      <span class="reg" style="background:#000">noir = Base</span>
+      <span class="reg" style="background:#c0392b">rouge = Carbone</span>
+      <span class="reg" style="background:#27ae60">vert = Option 1</span>
+      <span class="reg" style="background:#2563c0">bleu = Option 2</span>
+      <span class="reg" style="background:#fff;color:#000;border-color:#ccc">blanc = logos/n°</span>.
+      Partez de la carte de région du template, ou générez une base de travail :
+      <button id="btnRegion" class="btn ghost" type="button" style="margin-top:10px">Générer customskin_region (noir = Base)</button></p>
   </div>
 
   <div class="actions">
@@ -308,7 +320,7 @@ main { flex: 1; padding-bottom: 48px; }
   <section class="help">
     <h2>Aide — livrées Le Mans Ultimate</h2>
     <ul>
-      <li><b>Deux fichiers.</b> LMU attend <span class="tag-file">customskin.tga</span> (le design) et <span class="tag-file">customskin_region.tga</span> (la carte des matériaux / régions). Réglez le rôle de chaque fichier dans sa carte.</li>
+      <li><b>Deux fichiers <u>différents</u>.</b> <span class="tag-file">customskin.tga</span> = votre design. <span class="tag-file">customskin_region.tga</span> = la carte des zones de matériau, faite d'<b>aplats de couleurs unies</b> (⬛ noir = Base, 🟥 rouge = Carbone, 🟩 vert = Option 1, 🟦 bleu = Option 2, ⬜ blanc = logos/numéros) — <b>ce n'est pas votre design</b>. Utilisez celle du template, ou le bouton « Générer customskin_region » ci-dessus. Ne la redimensionnez jamais (les couleurs doivent rester franches).</li>
       <li><b>Calque « Mask » (voile blanc) — retiré automatiquement.</b> En Mode LMU, l'option <i>« Ignorer le calque Mask »</i> relit les calques du PSD et inverse le masque du template (la cause du voile blanc), sans toucher au canal alpha ni aux autres calques. Nécessite un PSD <b>avec ses calques</b> et une connexion (lecture via ag-psd). À défaut, masquez le calque <b>Mask</b> dans Photoshop (gardez <b>Levels</b> visible) et ré-enregistrez avec « Maximiser la compatibilité ».</li>
       <li><b>32 bits, non compressé.</b> En Mode LMU c'est imposé automatiquement. En 24 bits ou compressé, la livrée s'affiche en <b>noir</b> dans le jeu.</li>
       <li><b>Dossier du jeu.</b> Copiez les .tga dans <i>…\steamapps\common\Le Mans Ultimate\UserData\Liveries</i>, puis <b>RELOAD</b> dans le showroom. Les réglages de matériaux (carbone, métal, brillance…) se font dans le showroom à partir de <i>customskin_region</i>.</li>
@@ -904,6 +916,19 @@ function lmuDuplicateRoles() {
 
 function setStatus(msg) { statusLine.textContent = msg; }
 
+// Génère un customskin_region de base : tout en noir (= matériau « Base »).
+// L'utilisateur peint ensuite des zones rouge/vert/bleu/blanc par-dessus si besoin.
+function generateRegion() {
+  const ref = items.find(i => i.status === "ready" && i.img);
+  const W = ref ? ref.img.width : 4096;
+  const H = ref ? ref.img.height : 4096;
+  const data = new Uint8ClampedArray(W * H * 4);
+  for (let i = 0; i < W * H; i++) data[i * 4 + 3] = 255;   // RVB = 0 (noir), alpha opaque
+  const tga = encodeTga({ width: W, height: H, data }, { bits: 32, rle: false });
+  download(new Blob([tga], { type: "image/tga" }), "customskin_region.tga");
+  setStatus("customskin_region.tga généré — " + W + "×" + H + " px, tout en Base (noir). Peignez des zones rouge/vert/bleu/blanc par-dessus si besoin.");
+}
+
 /* Événements ---------------------------------------------------------- */
 dropzone.addEventListener("click", () => fileInput.click());
 dropzone.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
@@ -928,6 +953,7 @@ btnZip.addEventListener("click", () => {
   const lmu = document.getElementById("optLmu").checked;
   download(buildZip(files), lmu ? "lmu-livery.zip" : "livrees-tga.zip");
 });
+document.getElementById("btnRegion").addEventListener("click", generateRegion);
 btnClear.addEventListener("click", () => {
   items.forEach(i => { if (i.url) URL.revokeObjectURL(i.url); });
   items.length = 0;
