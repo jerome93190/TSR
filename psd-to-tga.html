@@ -648,11 +648,14 @@ function nodeColor(node) {
 }
 function nodeCoverage(node, W, H) {
   const cov = new Uint8Array(W * H), m = node.mask;
-  if (m && !m.disabled && (m.canvas || m.imageData)) {
-    const def = m.defaultColor == null ? 0 : m.defaultColor; if (def) cov.fill(def);
-    const px = readPixels(m), ml = m.left || 0, mt = m.top || 0;
-    for (let y = 0; y < px.h; y++) { const Y = mt + y; if (Y < 0 || Y >= H) continue;
-      for (let x = 0; x < px.w; x++) { const X = ml + x; if (X < 0 || X >= W) continue; cov[Y * W + X] = px.d[(y * px.w + x) * 4]; } }
+  if (m && !m.disabled) {                               // masque présent : on respecte sa couleur par défaut
+    const def = m.defaultColor == null ? 0 : m.defaultColor;
+    if (def) cov.fill(def);
+    if (m.canvas || m.imageData) {                      // ...puis on plaque les pixels du masque s'il y en a
+      const px = readPixels(m), ml = m.left || 0, mt = m.top || 0;
+      for (let y = 0; y < px.h; y++) { const Y = mt + y; if (Y < 0 || Y >= H) continue;
+        for (let x = 0; x < px.w; x++) { const X = ml + x; if (X < 0 || X >= W) continue; cov[Y * W + X] = px.d[(y * px.w + x) * 4]; } }
+    }
     return cov;
   }
   if (node.canvas || node.imageData) {                  // pas de masque : on prend l'alpha du calque
