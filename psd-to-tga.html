@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Convertisseur PSD → TGA — Le Mans Ultimate</title>
+<meta name="description" content="Convertisseur de livrées PSD vers TGA pour Le Mans Ultimate (LMU). 100% navigateur, hors-ligne, conserve le canal alpha (carte de spécularité)." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --bg: #0a0e14;
+  --bg-2: #11161f;
+  --bg-3: #1a212e;
+  --border: #232c3d;
+  --text: #e6ebf2;
+  --muted: #8a95a8;
+  --accent: #ff3c3c;
+  --accent-2: #ffb84d;
+  --green: #3ddc84;
+  --blue: #4da3ff;
+  --purple: #b87cff;
+  --shadow: 0 8px 24px rgba(0,0,0,0.35);
+  --radius: 12px;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg); color: var(--text);
+  font-family: 'Rajdhani', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  font-size: 16px; line-height: 1.4; min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+.container { max-width: 1100px; margin: 0 auto; padding: 0 24px; width: 100%; }
+a { color: var(--blue); }
+
+.site-header {
+  background: linear-gradient(180deg, #11161f 0%, #0a0e14 100%);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 50;
+  backdrop-filter: blur(8px);
+}
+.header-inner { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; gap: 24px; }
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand-logo {
+  color: var(--accent);
+  display: grid; place-items: center;
+  width: 48px; height: 48px;
+  background: rgba(255, 60, 60, 0.08);
+  border: 1px solid rgba(255, 60, 60, 0.3);
+  border-radius: 50%;
+}
+.brand h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; }
+.tagline { margin: 0; color: var(--muted); font-size: 13px; letter-spacing: 0.3px; }
+.nav-link { color: var(--muted); text-decoration: none; font-weight: 600; font-size: 14px; letter-spacing: 0.4px; }
+.nav-link:hover { color: var(--accent-2); }
+
+main { flex: 1; padding-bottom: 48px; }
+
+.intro { margin: 28px 0 8px; }
+.intro p { color: var(--muted); margin: 6px 0 0; font-size: 15px; }
+
+/* Drop zone */
+.dropzone {
+  margin: 22px 0;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 40px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.dropzone:hover { border-color: var(--accent); background: var(--bg-3); }
+.dropzone.drag { border-color: var(--accent); background: rgba(255,60,60,0.06); transform: scale(1.005); }
+.dropzone svg { color: var(--accent); opacity: .9; }
+.dropzone .dz-title { font-size: 18px; font-weight: 600; margin: 10px 0 4px; }
+.dropzone .dz-sub { color: var(--muted); font-size: 14px; }
+
+/* Options */
+.options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+}
+.opt label { display: block; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.opt select {
+  width: 100%; background: var(--bg-3); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 12px; font-family: inherit; font-size: 14px; font-weight: 600;
+}
+.opt select:focus { outline: none; border-color: var(--accent); }
+.opt.check { display: flex; align-items: center; gap: 10px; padding-top: 18px; }
+.opt.check input { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+.opt.check label { margin: 0; text-transform: none; letter-spacing: .3px; font-size: 14px; color: var(--text); font-weight: 600; cursor: pointer; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 20px 0; }
+.btn {
+  background: var(--accent); color: #fff; border: 1px solid var(--accent);
+  padding: 11px 20px; border-radius: 8px; font-family: inherit;
+  font-weight: 700; font-size: 14px; letter-spacing: .5px; text-transform: uppercase;
+  cursor: pointer; transition: all .15s ease;
+}
+.btn:hover:not(:disabled) { filter: brightness(1.08); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn.ghost { background: var(--bg-2); color: var(--text); border-color: var(--border); }
+.btn.ghost:hover:not(:disabled) { border-color: var(--accent); }
+.status-line { color: var(--muted); font-size: 14px; margin-left: auto; }
+
+/* Results */
+.results { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; margin-top: 8px; }
+.card {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.card-preview {
+  position: relative; height: 170px;
+  display: grid; place-items: center;
+  background-color: #1a212e;
+  background-image:
+    linear-gradient(45deg, #20283600 25%, #20283699 0, #20283699 75%, #20283600 0),
+    linear-gradient(45deg, #20283600 25%, #20283699 0, #20283699 75%, #20283600 0);
+  background-size: 18px 18px;
+  background-position: 0 0, 9px 9px;
+  overflow: hidden;
+}
+.card-preview canvas { max-width: 100%; max-height: 100%; image-rendering: auto; display: block; }
+.card-preview .spinner { width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.card-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.card-name { font-weight: 600; font-size: 15px; word-break: break-all; }
+.card-meta { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; letter-spacing: .3px; }
+.badge.alpha { background: rgba(61,220,132,.12); color: var(--green); border: 1px solid rgba(61,220,132,.35); }
+.badge.noalpha { background: rgba(138,149,168,.12); color: var(--muted); border: 1px solid var(--border); }
+.badge.err { background: rgba(255,60,60,.12); color: var(--accent); border: 1px solid rgba(255,60,60,.4); }
+.card-err { color: var(--accent); font-size: 13px; }
+.card-foot { margin-top: auto; display: flex; gap: 8px; align-items: center; }
+.dl {
+  flex: 1; text-align: center; text-decoration: none;
+  background: var(--bg-3); color: var(--text); border: 1px solid var(--border);
+  padding: 9px 12px; border-radius: 8px; font-weight: 700; font-size: 13px;
+  letter-spacing: .4px; transition: all .15s ease;
+}
+.dl:hover { border-color: var(--green); color: var(--green); }
+.dl.disabled { opacity: .35; pointer-events: none; }
+.icon-btn { background: var(--bg-3); border: 1px solid var(--border); color: var(--muted); border-radius: 8px; width: 36px; height: 36px; cursor: pointer; font-size: 16px; line-height: 1; transition: all .15s ease; }
+.icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+.empty { color: var(--muted); text-align: center; padding: 30px; font-size: 15px; }
+
+/* Help */
+.help { margin-top: 36px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 24px; }
+.help h2 { font-size: 13px; letter-spacing: 2.5px; text-transform: uppercase; color: var(--muted); margin: 0 0 14px; }
+.help ul { margin: 0; padding-left: 20px; color: var(--text); }
+.help li { margin: 7px 0; }
+.help li b { color: var(--accent-2); }
+.help .note { color: var(--muted); font-size: 14px; margin-top: 14px; }
+
+.site-footer { border-top: 1px solid var(--border); margin-top: auto; padding: 24px 0; }
+.footer-inner p { margin: 4px 0; font-size: 13px; }
+.footer-inner .muted { color: var(--muted); }
+
+@media (max-width: 560px) {
+  .header-inner { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .status-line { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<header class="site-header">
+  <div class="container header-inner">
+    <div class="brand">
+      <div class="brand-logo" aria-hidden="true">
+        <svg viewBox="0 0 64 64" width="40" height="40">
+          <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" stroke-width="3"/>
+          <path d="M14 32 L32 14 L50 32 L32 50 Z" fill="none" stroke="currentColor" stroke-width="2"/>
+          <circle cx="32" cy="32" r="4" fill="currentColor"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>PSD → TGA</h1>
+        <p class="tagline">Convertisseur de livrées · Le Mans Ultimate</p>
+      </div>
+    </div>
+    <a class="nav-link" href="index.html">← Calendrier LMU</a>
+  </div>
+</header>
+
+<main class="container">
+  <section class="intro">
+    <h2 style="margin:0;font-size:26px;font-weight:700;">Convertir vos livrées PSD en TGA</h2>
+    <p>Glissez vos fichiers Photoshop (.psd) ci-dessous. La conversion se fait <b style="color:var(--text)">entièrement dans votre navigateur</b> — aucun fichier n'est envoyé sur Internet. Le canal alpha (carte de spécularité) est conservé.</p>
+  </section>
+
+  <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Ajouter des fichiers PSD">
+    <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="7 9 12 4 17 9"/>
+      <line x1="12" y1="4" x2="12" y2="16"/>
+    </svg>
+    <div class="dz-title">Déposez vos fichiers .psd ici</div>
+    <div class="dz-sub">ou cliquez pour parcourir · plusieurs fichiers acceptés</div>
+    <input id="fileInput" type="file" accept=".psd,image/vnd.adobe.photoshop" multiple hidden />
+  </div>
+
+  <section class="options" aria-label="Options de conversion">
+    <div class="opt">
+      <label for="optFormat">Format de sortie</label>
+      <select id="optFormat">
+        <option value="auto" selected>Auto (alpha si présent)</option>
+        <option value="32">32 bits — RGBA (avec alpha)</option>
+        <option value="24">24 bits — RGB (sans alpha)</option>
+      </select>
+    </div>
+    <div class="opt">
+      <label for="optSize">Taille</label>
+      <select id="optSize">
+        <option value="orig" selected>Conserver l'original</option>
+        <option value="4096">4096 px (4K)</option>
+        <option value="2048">2048 px (2K)</option>
+        <option value="1024">1024 px</option>
+        <option value="512">512 px</option>
+      </select>
+    </div>
+    <div class="opt check">
+      <input type="checkbox" id="optRle" />
+      <label for="optRle">Compression RLE</label>
+    </div>
+    <div class="opt check">
+      <input type="checkbox" id="optInvert" />
+      <label for="optInvert">Inverser l'alpha</label>
+    </div>
+  </section>
+
+  <div class="actions">
+    <button id="btnConvert" class="btn" disabled>Convertir tout</button>
+    <button id="btnZip" class="btn ghost" disabled>Télécharger le ZIP</button>
+    <button id="btnClear" class="btn ghost" disabled>Vider</button>
+    <span class="status-line" id="statusLine"></span>
+  </div>
+
+  <section id="results" class="results" aria-live="polite">
+    <p class="empty" id="emptyMsg">Aucun fichier pour l'instant. Ajoutez des PSD pour commencer.</p>
+  </section>
+
+  <section class="help">
+    <h2>À propos</h2>
+    <ul>
+      <li><b>Alpha = spécularité.</b> Sur le moteur rFactor 2 / Le Mans Ultimate, le canal alpha de la texture de livrée sert souvent de carte de spécularité / réflectivité. Le mode « 32 bits » (ou « Auto ») le conserve.</li>
+      <li><b>Maximiser la compatibilité.</b> Enregistrez votre PSD avec l'option « Maximiser la compatibilité des fichiers » activée dans Photoshop, afin que l'image aplatie soit lisible.</li>
+      <li><b>RGB 8 bits.</b> Le PSD doit être en mode RVB (ou Niveaux de gris), 8 bits par couche. Convertissez via <i>Image &gt; Mode</i> si besoin.</li>
+      <li><b>Compression RLE</b> réduit la taille du .tga sans perte ; laissez-la décochée pour une compatibilité maximale.</li>
+    </ul>
+    <p class="note">Tout est traité localement dans le navigateur — vos fichiers ne quittent jamais votre ordinateur.</p>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <p>Convertisseur PSD → TGA pour livrées Le Mans Ultimate.</p>
+    <p class="muted">Traitement 100&nbsp;% local · Application non affiliée à Motorsport Games / Studio 397.</p>
+  </div>
+</footer>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ *  Lecteur PSD (image composite aplatie) — sans dépendance externe.
+ *  Gère : RVB / Niveaux de gris, 8 ou 16 bits, composite brut (raw)
+ *  ou compressé RLE (PackBits). Le canal alpha (transparence ou
+ *  première couche alpha enregistrée) est restitué tel quel.
+ * ------------------------------------------------------------------ */
+
+function modeName(m) {
+  return { 0:"Bitmap", 1:"Niveaux de gris", 2:"Indexé", 3:"RVB",
+           4:"CMJN", 7:"Multicouche", 8:"Bichromie", 9:"Lab" }[m] || ("mode " + m);
+}
+
+function parsePsd(buffer) {
+  const dv = new DataView(buffer);
+  const u8 = new Uint8Array(buffer);
+  if (dv.byteLength < 26) throw new Error("Fichier trop petit ou invalide.");
+  // Signature "8BPS"
+  if (!(u8[0] === 0x38 && u8[1] === 0x42 && u8[2] === 0x50 && u8[3] === 0x53))
+    throw new Error("Ce n'est pas un fichier PSD valide (signature 8BPS absente).");
+  const version = dv.getUint16(4, false);
+  if (version !== 1)
+    throw new Error("Format PSB (grand document) non géré — enregistrez en PSD classique.");
+  const channels = dv.getUint16(12, false);
+  const height = dv.getUint32(14, false);
+  const width = dv.getUint32(18, false);
+  const depth = dv.getUint16(22, false);
+  const mode = dv.getUint16(24, false);
+
+  if (mode !== 3 && mode !== 1)
+    throw new Error("Mode couleur « " + modeName(mode) + " » non géré. Passez en RVB 8 bits (Image > Mode).");
+  if (depth !== 8 && depth !== 16)
+    throw new Error("Profondeur " + depth + " bits non gérée. Passez en 8 bits (Image > Mode > 8 bits/couche).");
+  if (!width || !height) throw new Error("Dimensions invalides.");
+
+  const stride = depth / 8;            // octets par échantillon
+  let off = 26;
+  off += 4 + dv.getUint32(off, false); // Color Mode Data
+  off += 4 + dv.getUint32(off, false); // Image Resources
+  off += 4 + dv.getUint32(off, false); // Layer & Mask Information
+
+  if (off + 2 > dv.byteLength)
+    throw new Error("Image aplatie absente. Ré-enregistrez avec « Maximiser la compatibilité ».");
+  const compression = dv.getUint16(off, false); off += 2;
+
+  const pixels = width * height;
+  const bytesPerChannel = pixels * stride;
+  const chData = [];
+
+  if (compression === 0) {
+    // Données brutes, planaires (toutes les valeurs de la couche 0, puis 1, ...)
+    for (let c = 0; c < channels; c++) {
+      const start = off + c * bytesPerChannel;
+      if (start + bytesPerChannel > dv.byteLength) break;
+      chData.push(u8.subarray(start, start + bytesPerChannel));
+    }
+  } else if (compression === 1) {
+    // RLE / PackBits : table des longueurs (uint16 par ligne) puis données.
+    const totalRows = height * channels;
+    let p = off + totalRows * 2;
+    const counts = [];
+    for (let i = 0; i < totalRows; i++) counts.push(dv.getUint16(off + i * 2, false));
+    const need = width * stride;
+    for (let c = 0; c < channels; c++) {
+      const dest = new Uint8Array(bytesPerChannel);
+      let dpos = 0;
+      for (let row = 0; row < height; row++) {
+        const rowEnd = p + counts[c * height + row];
+        let produced = 0;
+        while (p < rowEnd && produced < need) {
+          const n = u8[p++];
+          if (n < 128) {                       // n+1 octets littéraux
+            const len = n + 1;
+            for (let k = 0; k < len; k++) { dest[dpos++] = u8[p++]; produced++; }
+          } else if (n > 128) {                // 1 octet répété 257-n fois
+            const len = 257 - n, val = u8[p++];
+            for (let k = 0; k < len; k++) { dest[dpos++] = val; produced++; }
+          }                                    // n === 128 : ne rien faire
+        }
+        p = rowEnd;                            // se recaler sur la ligne suivante
+      }
+      chData.push(dest);
+    }
+  } else {
+    throw new Error("Composite compressée en ZIP non gérée. Ré-enregistrez avec « Maximiser la compatibilité ».");
+  }
+
+  const baseColor = (mode === 3) ? 3 : 1;
+  if (chData.length < baseColor)
+    throw new Error("Couches couleur incomplètes. Ré-enregistrez avec « Maximiser la compatibilité ».");
+
+  // Big-endian : l'octet de poids fort est le premier de l'échantillon (idx*stride).
+  const get = (c, i) => chData[c][i * stride];
+  const alphaIdx = (channels >= baseColor + 1 && chData[baseColor]) ? baseColor : -1;
+
+  const rgba = new Uint8ClampedArray(pixels * 4);
+  for (let i = 0; i < pixels; i++) {
+    let r, g, b;
+    if (mode === 3) { r = get(0, i); g = get(1, i); b = get(2, i); }
+    else { r = g = b = get(0, i); }
+    const a = (alphaIdx >= 0) ? get(alphaIdx, i) : 255;
+    const o = i * 4;
+    rgba[o] = r; rgba[o + 1] = g; rgba[o + 2] = b; rgba[o + 3] = a;
+  }
+  return { width, height, data: rgba, hasAlpha: alphaIdx >= 0, mode, depth };
+}
+
+/* ------------------------------------------------------------------ *
+ *  Encodeur TGA (Truevision Targa, non compressé ou RLE).
+ * ------------------------------------------------------------------ */
+
+class ByteWriter {
+  constructor(cap) { this.buf = new Uint8Array(cap || 1024); this.len = 0; }
+  _ensure(n) {
+    if (this.len + n <= this.buf.length) return;
+    let nc = this.buf.length * 2;
+    while (nc < this.len + n) nc *= 2;
+    const nb = new Uint8Array(nc); nb.set(this.buf); this.buf = nb;
+  }
+  u8(v) { this._ensure(1); this.buf[this.len++] = v & 0xff; }
+  bytes(arr) { this._ensure(arr.length); this.buf.set(arr, this.len); this.len += arr.length; }
+  result() { return this.buf.subarray(0, this.len); }
+}
+
+function encodeRleRow(row, width, bpp, w) {
+  const eq = (i, j) => { const a = i * bpp, b = j * bpp; for (let k = 0; k < bpp; k++) if (row[a + k] !== row[b + k]) return false; return true; };
+  const put = (i) => { const a = i * bpp; for (let k = 0; k < bpp; k++) w.u8(row[a + k]); };
+  let x = 0;
+  while (x < width) {
+    let run = 1;
+    while (x + run < width && run < 128 && eq(x, x + run)) run++;
+    if (run >= 2) {                         // paquet RLE
+      w.u8(0x80 | (run - 1)); put(x); x += run;
+    } else {                                // paquet littéral
+      let start = x, raw = 1; x++;
+      while (x < width && raw < 128) {
+        if (x + 1 < width && eq(x, x + 1)) break;
+        raw++; x++;
+      }
+      w.u8(raw - 1);
+      for (let i = 0; i < raw; i++) put(start + i);
+    }
+  }
+}
+
+function encodeTga(img, opts) {
+  const { width, height, data } = img;
+  const bits = opts.bits === 24 ? 24 : 32;
+  const bpp = bits / 8;
+  const rle = !!opts.rle;
+  const invert = !!opts.invertAlpha;
+
+  const w = new ByteWriter(18 + width * height * bpp + (width * height >> 5) + 64);
+  w.u8(0);                 // longueur du champ ID
+  w.u8(0);                 // pas de palette
+  w.u8(rle ? 10 : 2);      // type : 10 = true-color RLE, 2 = true-color brut
+  w.u8(0); w.u8(0); w.u8(0); w.u8(0); w.u8(0); // spéc. palette (vide)
+  w.u8(0); w.u8(0); w.u8(0); w.u8(0);          // origine X / Y
+  w.u8(width & 0xff); w.u8((width >> 8) & 0xff);
+  w.u8(height & 0xff); w.u8((height >> 8) & 0xff);
+  w.u8(bits);
+  w.u8(bits === 32 ? 8 : 0); // descripteur : bits d'alpha, origine bas-gauche
+
+  // TGA classique = stocké de bas en haut. Ordre des octets : BGRA.
+  const row = new Uint8Array(width * bpp);
+  for (let y = height - 1; y >= 0; y--) {
+    let ri = 0; const base = y * width * 4;
+    for (let x = 0; x < width; x++) {
+      const o = base + x * 4;
+      row[ri++] = data[o + 2];                 // B
+      row[ri++] = data[o + 1];                 // G
+      row[ri++] = data[o];                     // R
+      if (bpp === 4) row[ri++] = invert ? 255 - data[o + 3] : data[o + 3];
+    }
+    if (rle) encodeRleRow(row, width, bpp, w);
+    else w.bytes(row);
+  }
+  return w.result();
+}
+
+/* ------------------------------------------------------------------ *
+ *  Redimensionnement (canvas) + miniature de prévisualisation.
+ * ------------------------------------------------------------------ */
+
+function imgToCanvas(img) {
+  const c = document.createElement("canvas");
+  c.width = img.width; c.height = img.height;
+  c.getContext("2d").putImageData(new ImageData(img.data, img.width, img.height), 0, 0);
+  return c;
+}
+
+function resizeImg(img, target) {
+  const longSide = Math.max(img.width, img.height);
+  if (target >= longSide) return img;                 // on n'agrandit jamais
+  const scale = target / longSide;
+  const tw = Math.max(1, Math.round(img.width * scale));
+  const th = Math.max(1, Math.round(img.height * scale));
+  const dst = document.createElement("canvas");
+  dst.width = tw; dst.height = th;
+  const ctx = dst.getContext("2d");
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(imgToCanvas(img), 0, 0, tw, th);
+  const id = ctx.getImageData(0, 0, tw, th);
+  return { width: tw, height: th, data: id.data, hasAlpha: img.hasAlpha, mode: img.mode, depth: img.depth };
+}
+
+function makeThumb(img, maxSize) {
+  const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+  const tw = Math.max(1, Math.round(img.width * scale));
+  const th = Math.max(1, Math.round(img.height * scale));
+  const c = document.createElement("canvas");
+  c.width = tw; c.height = th;
+  const ctx = c.getContext("2d");
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(imgToCanvas(img), 0, 0, tw, th);
+  return c;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Archive ZIP (méthode « stockée », sans compression) + CRC32.
+ * ------------------------------------------------------------------ */
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function buildZip(files) {
+  const enc = new TextEncoder();
+  const chunks = [], central = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name);
+    const crc = crc32(f.bytes), size = f.bytes.length;
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true);
+    lh.setUint16(6, 0, true); lh.setUint16(8, 0, true);
+    lh.setUint16(10, 0, true); lh.setUint16(12, 0, true);
+    lh.setUint32(14, crc, true); lh.setUint32(18, size, true); lh.setUint32(22, size, true);
+    lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+    chunks.push(new Uint8Array(lh.buffer), name, f.bytes);
+
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true);
+    ch.setUint16(8, 0, true); ch.setUint16(10, 0, true);
+    ch.setUint16(12, 0, true); ch.setUint16(14, 0, true);
+    ch.setUint32(16, crc, true); ch.setUint32(20, size, true); ch.setUint32(24, size, true);
+    ch.setUint16(28, name.length, true); ch.setUint16(30, 0, true); ch.setUint16(32, 0, true);
+    ch.setUint16(34, 0, true); ch.setUint16(36, 0, true);
+    ch.setUint32(38, 0, true); ch.setUint32(42, offset, true);
+    central.push(new Uint8Array(ch.buffer), name);
+    offset += 30 + name.length + size;
+  }
+  let cdSize = 0; for (const c of central) cdSize += c.length;
+  const eocd = new DataView(new ArrayBuffer(22));
+  eocd.setUint32(0, 0x06054b50, true);
+  eocd.setUint16(4, 0, true); eocd.setUint16(6, 0, true);
+  eocd.setUint16(8, files.length, true); eocd.setUint16(10, files.length, true);
+  eocd.setUint32(12, cdSize, true); eocd.setUint32(16, offset, true); eocd.setUint16(20, 0, true);
+  return new Blob([...chunks, ...central, new Uint8Array(eocd.buffer)], { type: "application/zip" });
+}
+
+/* ------------------------------------------------------------------ *
+ *  Interface.
+ * ------------------------------------------------------------------ */
+
+function fmtBytes(n) {
+  if (n < 1024) return n + " o";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " Ko";
+  return (n / (1024 * 1024)).toFixed(1) + " Mo";
+}
+function baseName(name) { return name.replace(/\.[^.]+$/, ""); }
+function download(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const items = [];
+let uidCounter = 0;
+
+const dropzone   = document.getElementById("dropzone");
+const fileInput  = document.getElementById("fileInput");
+const results    = document.getElementById("results");
+const emptyMsg   = document.getElementById("emptyMsg");
+const btnConvert = document.getElementById("btnConvert");
+const btnZip     = document.getElementById("btnZip");
+const btnClear   = document.getElementById("btnClear");
+const statusLine = document.getElementById("statusLine");
+
+function refreshButtons() {
+  const ready = items.filter(i => i.status === "ready").length;
+  const converted = items.filter(i => i.tgaBytes).length;
+  btnConvert.disabled = ready === 0;
+  btnZip.disabled = converted < 1;
+  btnClear.disabled = items.length === 0;
+}
+
+function render() {
+  emptyMsg.style.display = items.length ? "none" : "block";
+  // On retire les cartes obsolètes puis on (re)construit.
+  results.querySelectorAll(".card").forEach(n => n.remove());
+  for (const it of items) {
+    const card = document.createElement("div");
+    card.className = "card";
+
+    const prev = document.createElement("div");
+    prev.className = "card-preview";
+    if (it.status === "loading") {
+      prev.innerHTML = '<div class="spinner"></div>';
+    } else if (it.status === "ready" && it.thumb) {
+      prev.appendChild(it.thumb);
+    } else if (it.status === "error") {
+      prev.innerHTML = '<span class="badge err">Erreur</span>';
+    }
+    card.appendChild(prev);
+
+    const body = document.createElement("div");
+    body.className = "card-body";
+    body.innerHTML = '<div class="card-name">' + escapeHtml(it.name) + '</div>';
+
+    if (it.status === "ready") {
+      const a = it.img.hasAlpha
+        ? '<span class="badge alpha">alpha ✓</span>'
+        : '<span class="badge noalpha">sans alpha</span>';
+      let meta = '<div class="card-meta"><span>' + it.img.width + '×' + it.img.height + '</span>'
+               + '<span>' + modeName(it.img.mode) + ' ' + it.img.depth + ' bit</span>' + a + '</div>';
+      if (it.tgaBytes) {
+        meta += '<div class="card-meta"><span>→ ' + it.outDims[0] + '×' + it.outDims[1]
+              + '</span><span>TGA ' + it.outBits + ' bit</span><span>' + fmtBytes(it.tgaBytes.length) + '</span></div>';
+      }
+      body.insertAdjacentHTML("beforeend", meta);
+
+      const foot = document.createElement("div");
+      foot.className = "card-foot";
+      const dl = document.createElement("a");
+      dl.className = "dl" + (it.url ? "" : " disabled");
+      dl.textContent = it.url ? "Télécharger .tga" : "Convertir d'abord";
+      if (it.url) { dl.href = it.url; dl.download = it.outName; }
+      foot.appendChild(dl);
+      const rm = document.createElement("button");
+      rm.className = "icon-btn"; rm.title = "Retirer"; rm.innerHTML = "✕";
+      rm.onclick = () => removeItem(it.id);
+      foot.appendChild(rm);
+      body.appendChild(foot);
+    } else if (it.status === "error") {
+      body.insertAdjacentHTML("beforeend", '<div class="card-err">' + escapeHtml(it.error) + '</div>');
+      const foot = document.createElement("div");
+      foot.className = "card-foot";
+      const rm = document.createElement("button");
+      rm.className = "icon-btn"; rm.title = "Retirer"; rm.innerHTML = "✕";
+      rm.onclick = () => removeItem(it.id);
+      foot.appendChild(rm);
+      body.appendChild(foot);
+    }
+    card.appendChild(body);
+    results.appendChild(card);
+  }
+  refreshButtons();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+
+function removeItem(id) {
+  const i = items.findIndex(x => x.id === id);
+  if (i < 0) return;
+  if (items[i].url) URL.revokeObjectURL(items[i].url);
+  items.splice(i, 1);
+  render();
+}
+
+async function addFiles(fileList) {
+  const list = Array.from(fileList);
+  for (const file of list) {
+    const it = { id: ++uidCounter, name: file.name, status: "loading" };
+    items.push(it);
+  }
+  render();
+  // On laisse l'UI peindre les spinners avant le travail lourd.
+  await new Promise(r => setTimeout(r, 0));
+  for (let k = 0; k < list.length; k++) {
+    const file = list[k];
+    const it = items.find(x => x.name === file.name && x.status === "loading" && !x._done);
+    if (!it) continue;
+    it._done = true;
+    try {
+      const buf = await file.arrayBuffer();
+      it.img = parsePsd(buf);
+      it.thumb = makeThumb(it.img, 320);
+      it.status = "ready";
+    } catch (e) {
+      it.status = "error";
+      it.error = e.message || String(e);
+    }
+    render();
+    await new Promise(r => setTimeout(r, 0));
+  }
+  setStatus(items.filter(i => i.status === "ready").length + " fichier(s) prêt(s).");
+}
+
+function getOpts() {
+  return {
+    format: document.getElementById("optFormat").value,
+    size: document.getElementById("optSize").value,
+    rle: document.getElementById("optRle").checked,
+    invertAlpha: document.getElementById("optInvert").checked,
+  };
+}
+
+function convertAll() {
+  const opts = getOpts();
+  let done = 0;
+  for (const it of items) {
+    if (it.status !== "ready") continue;
+    try {
+      let img = it.img;
+      if (opts.size !== "orig") img = resizeImg(img, parseInt(opts.size, 10));
+      const bits = opts.format === "auto" ? (img.hasAlpha ? 32 : 24) : parseInt(opts.format, 10);
+      const tga = encodeTga(img, { bits, rle: opts.rle, invertAlpha: opts.invertAlpha });
+      if (it.url) URL.revokeObjectURL(it.url);
+      it.tgaBytes = tga;
+      it.outName = baseName(it.name) + ".tga";
+      it.outBits = bits;
+      it.outDims = [img.width, img.height];
+      it.url = URL.createObjectURL(new Blob([tga], { type: "image/tga" }));
+      done++;
+    } catch (e) {
+      it.status = "error"; it.error = e.message || String(e);
+    }
+  }
+  render();
+  setStatus(done + " fichier(s) converti(s) en TGA.");
+}
+
+function setStatus(msg) { statusLine.textContent = msg; }
+
+/* Événements ---------------------------------------------------------- */
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
+fileInput.addEventListener("change", () => { if (fileInput.files.length) addFiles(fileInput.files); fileInput.value = ""; });
+
+["dragenter", "dragover"].forEach(ev =>
+  dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add("drag"); }));
+["dragleave", "drop"].forEach(ev =>
+  dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove("drag"); }));
+dropzone.addEventListener("drop", e => {
+  const files = e.dataTransfer && e.dataTransfer.files;
+  if (files && files.length) addFiles(files);
+});
+// Empêche le navigateur d'ouvrir un PSD lâché à côté de la zone.
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", e => e.preventDefault());
+
+btnConvert.addEventListener("click", convertAll);
+btnZip.addEventListener("click", () => {
+  const files = items.filter(i => i.tgaBytes).map(i => ({ name: i.outName, bytes: i.tgaBytes }));
+  if (!files.length) return;
+  download(buildZip(files), "livrees-tga.zip");
+});
+btnClear.addEventListener("click", () => {
+  items.forEach(i => { if (i.url) URL.revokeObjectURL(i.url); });
+  items.length = 0;
+  setStatus("");
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
