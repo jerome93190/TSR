@@ -304,7 +304,8 @@ main { flex: 1; padding-bottom: 48px; }
       <span class="reg" style="background:#fff;color:#000;border-color:#ccc">blanc = logos/n°</span>.
       Si votre PSD contient un <b>groupe « Region »</b> (calques Region 0→4 couleur + masque), l'appli peut le composer automatiquement :
       <button id="btnExtractRegion" class="btn" type="button" style="margin-top:10px">Extraire customskin_region du PSD</button>
-      <button id="btnRegion" class="btn ghost" type="button" style="margin-top:10px">…ou générer un fond noir (Base)</button></p>
+      <button id="btnRegion" class="btn ghost" type="button" style="margin-top:10px">…ou générer un fond noir (Base)</button>
+      <button id="btnDiagRegion" class="btn ghost" type="button" style="margin-top:10px">🔍 Diagnostic région</button></p>
   </div>
 
   <div class="actions">
@@ -1021,6 +1022,48 @@ async function extractRegionFromPsd() {
   setBusy(false);
 }
 
+// Diagnostic : décrit la structure réelle du groupe Region (tout reste local).
+async function diagnoseRegion() {
+  const ref = items.find(i => i.status === "ready" && i.buf);
+  if (!ref) { setStatus("Chargez d'abord votre PSD."); return; }
+  setBusy(true); setStatus("Diagnostic des calques…");
+  await new Promise(r => setTimeout(r, 0));
+  try {
+    const agPsd = await loadAgPsd();
+    const psd = agPsd.readPsd(ref.buf, { skipThumbnail: true, skipCompositeImageData: true });
+    const W = psd.width, H = psd.height, L = [];
+    L.push("PSD " + W + "x" + H + " | ag-psd diagnostic région");
+    const group = findRegionGroup(psd.children || []);
+    if (!group) {
+      L.push("GROUPE 'Region' INTROUVABLE.");
+      L.push("Calques 1er niveau: " + (psd.children || []).map(n => JSON.stringify(n.name) + (n.children ? "{groupe}" : "")).join(", "));
+    } else {
+      L.push("Groupe " + JSON.stringify(group.name) + " hidden=" + group.hidden + " blend=" + group.blendMode + " enfants=" + (group.children || []).length);
+      (group.children || []).forEach((l, i) => {
+        L.push("[" + i + "] " + JSON.stringify(l.name) + " hidden=" + l.hidden + " op=" + l.opacity + " blend=" + l.blendMode);
+        L.push("   pixels canvas=" + (l.canvas ? l.canvas.width + "x" + l.canvas.height : "-") + " imageData=" + (l.imageData ? l.imageData.width + "x" + l.imageData.height : "-"));
+        Object.keys(l).filter(k => /fill|color|solid|vector|adjust/i.test(k)).forEach(k => {
+          let v; try { v = JSON.stringify(l[k]); } catch (e) { v = "?"; } if (v && v.length > 220) v = v.slice(0, 220) + "…"; L.push("   " + k + "=" + v);
+        });
+        let col; try { col = nodeColor(l); } catch (e) { col = "ERR:" + e.message; }
+        L.push("   >>nodeColor=" + (Array.isArray(col) ? "[" + col + "]" : col));
+        if (l.mask) {
+          L.push("   mask canvas=" + (l.mask.canvas ? l.mask.canvas.width + "x" + l.mask.canvas.height : "-") + " imageData=" + (l.mask.imageData ? "oui" : "-") + " default=" + l.mask.defaultColor + " disabled=" + l.mask.disabled + " bounds=[" + l.mask.left + "," + l.mask.top + "," + l.mask.right + "," + l.mask.bottom + "]");
+          const mpx = (l.mask.canvas || l.mask.imageData) ? readPixels(l.mask) : null;
+          if (mpx) { let mn = 255, mx = 0, s = 0, c = 0; const st = Math.max(1, (mpx.w * mpx.h / 8000) | 0); for (let p = 0; p < mpx.w * mpx.h; p += st) { const v = mpx.d[p * 4]; mn = Math.min(mn, v); mx = Math.max(mx, v); s += v; c++; } L.push("     mask R: min=" + mn + " max=" + mx + " moy=" + Math.round(s / c)); }
+        } else L.push("   mask: AUCUN");
+        let cov; try { cov = nodeCoverage(l, W, H); } catch (e) { cov = null; L.push("   coverage ERR:" + e.message); }
+        if (cov) { let nz = 0, tot = 0; const st = Math.max(1, (W * H / 40000) | 0); for (let p = 0; p < W * H; p += st) { tot++; if (cov[p] > 0) nz++; } L.push("   >>couverture>0 ≈ " + Math.round(100 * nz / tot) + "%"); }
+      });
+    }
+    download(new Blob([L.join("\n")], { type: "text/plain" }), "region-diagnostic.txt");
+    setStatus("✓ Diagnostic téléchargé (region-diagnostic.txt) — colle-moi son contenu.");
+  } catch (e) {
+    setStatus("Diagnostic impossible : " + (e.message || e));
+  }
+  setBusy(false);
+}
+
 /* Événements ---------------------------------------------------------- */
 dropzone.addEventListener("click", () => fileInput.click());
 dropzone.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
@@ -1047,6 +1090,7 @@ btnZip.addEventListener("click", () => {
 });
 document.getElementById("btnRegion").addEventListener("click", generateRegion);
 document.getElementById("btnExtractRegion").addEventListener("click", extractRegionFromPsd);
+document.getElementById("btnDiagRegion").addEventListener("click", diagnoseRegion);
 btnClear.addEventListener("click", () => {
   items.forEach(i => { if (i.url) URL.revokeObjectURL(i.url); });
   items.length = 0;
