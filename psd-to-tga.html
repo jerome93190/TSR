@@ -593,8 +593,8 @@ async function removeMaskLayers(buffer, width, height, baseRgba) {
   const tmp = document.createElement("canvas");
   tmp.width = width; tmp.height = height;
   const tctx = tmp.getContext("2d");
-  // ag-psd place le calque du sommet en children[0] : on parcourt du haut vers le bas.
-  for (let i = 0; i < top.length; i++) {
+  // ag-psd : children[last] = sommet de la pile ; on parcourt du haut (last) vers le bas.
+  for (let i = top.length - 1; i >= 0; i--) {
     const layer = top[i];
     if (layer.hidden) continue;                          // calque masqué : absent du composite
     const isMask = /mask|masque/i.test(layer.name || "");
@@ -624,7 +624,7 @@ async function removeMaskLayers(buffer, width, height, baseRgba) {
  *  Chaque calque = une couleur unie + un masque ; on les composite
  *  (du bas vers le haut) pour reconstituer la carte d'aplats.
  *  Validé contre la structure réelle d'ag-psd (couleur dans le canvas,
- *  masque en niveaux de gris séparé, opacité 0–1, children[0] = sommet).
+ *  masque en niveaux de gris séparé, opacité 0–1, children[0] = fond).
  * ------------------------------------------------------------------ */
 
 function findRegionGroup(nodes) {
@@ -668,7 +668,7 @@ function extractRegion(group, W, H) {
   const out = new Uint8ClampedArray(W * H * 4);
   for (let i = 0; i < W * H; i++) out[i * 4 + 3] = 255; // région opaque
   let drew = 0;
-  for (let i = kids.length - 1; i >= 0; i--) {          // bas → haut (children[0] = sommet)
+  for (let i = 0; i < kids.length; i++) {               // bas → haut (children[0] = fond, children[last] = sommet)
     const layer = kids[i];
     if (layer.hidden) continue;
     const color = nodeColor(layer); if (!color) continue;
